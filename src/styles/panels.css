@@ -1,0 +1,249 @@
+/**
+ * Cosmic Fabric - Panel Styles
+ * 
+ * Styles for the main UI panels (left, right, bottom, top).
+ */
+
+/* Main Application Layout */
+.app-layout {
+    display: grid;
+    grid-template-areas:
+        "topbar topbar topbar"
+        "left canvas right"
+        "left bottom right";
+    grid-template-columns: var(--panel-width-md) 1fr var(--panel-width-md);
+    grid-template-rows: var(--topbar-height) 1fr var(--panel-height-bottom);
+    height: 100vh;
+    width: 100vw;
+    background-color: var(--color-bg-primary);
+}
+
+.app-layout--left-closed {
+    grid-template-columns: 0 1fr var(--panel-width-md);
+}
+
+.app-layout--right-closed {
+    grid-template-columns: var(--panel-width-md) 1fr 0;
+}
+
+.app-layout--bottom-closed {
+    grid-template-rows: var(--topbar-height) 1fr 0;
+}
+
+/* Canvas Container */
+.canvas-container {
+    grid-area: canvas;
+    position: relative;
+    overflow: hidden;
+    background-color: #000;
+}
+
+/* Panel Base */
+.panel {
+    background-color: var(--color-bg-secondary);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--color-border-subtle);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: width var(--transition-normal), height var(--transition-normal);
+}
+
+/* Top Bar */
+.topbar {
+    grid-area: topbar;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--spacing-4);
+    background-color: var(--color-bg-secondary);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--color-border-subtle);
+    z-index: var(--z-sticky);
+}
+
+.topbar__logo {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-3);
+}
+
+.topbar__title {
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    letter-spacing: 0.02em;
+}
+
+.topbar__mode-switch {
+    display: flex;
+    gap: var(--spacing-2);
+}
+
+.topbar__controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-4);
+}
+
+/* Left Panel */
+.panel-left {
+    grid-area: left;
+    border-right: 1px solid var(--color-border-subtle);
+}
+
+/* Right Panel */
+.panel-right {
+    grid-area: right;
+    border-left: 1px solid var(--color-border-subtle);
+}
+
+/* Bottom Panel */
+.panel-bottom {
+    grid-area: bottom;
+    border-top: 1px solid var(--color-border-subtle);
+    flex-direction: row;
+}
+
+/* Panel Header */
+.panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-3) var(--spacing-4);
+    border-bottom: 1px solid var(--color-border-subtle);
+    background-color: rgba(26, 26, 37, 0.4);
+}
+
+.panel__title {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* Panel Content */
+.panel__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--spacing-3);
+}
+
+/* Panel Section */
+.panel-section {
+    margin-bottom: var(--spacing-4);
+}
+
+.panel-section__title {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: var(--spacing-2);
+    padding-bottom: var(--spacing-1);
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* Timeline Panel (Bottom) */
+.timeline {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: var(--spacing-3) var(--spacing-4);
+}
+
+.timeline__controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-4);
+    margin-bottom: var(--spacing-3);
+}
+
+.timeline__scrubber {
+    flex: 1;
+    height: 32px;
+    background-color: var(--color-bg-tertiary);
+    border-radius: var(--radius-md);
+    position: relative;
+    cursor: pointer;
+}
+
+.timeline__track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    background-color: var(--color-bg-elevated);
+    border-radius: var(--radius-full);
+}
+
+.timeline__progress {
+    height: 100%;
+    background-color: var(--color-accent-primary);
+    border-radius: var(--radius-full);
+    transition: width var(--transition-fast);
+}
+
+.timeline__info {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+}
+
+/* Time Display */
+.time-display {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.time-display__value {
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-medium);
+}
+
+.time-display__unit {
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-xs);
+}
+
+/* Data Readout (Right Panel) */
+.data-readout {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1);
+}
+
+.data-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-1) 0;
+}
+
+.data-row__label {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+}
+
+.data-row__value {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+}
+
+.data-row__unit {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    margin-left: var(--spacing-1);
+}

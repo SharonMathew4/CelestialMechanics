@@ -1,0 +1,52 @@
+
+> stellarforge-enhanced@1.0.0 build
+> tsc && vite build
+
+src/App.tsx(7,8): error TS6133: 'React' is declared but its value is never read.
+src/components/BottomPanel.tsx(7,1): error TS6133: 'React' is declared but its value is never read.
+src/components/RightPanel.tsx(7,1): error TS6133: 'React' is declared but its value is never read.
+src/components/RightPanel.tsx(14,11): error TS6133: 'performance' is declared but its value is never read.
+src/components/RightPanel.tsx(17,48): error TS2339: Property 'engine' does not exist on type 'SimulationState'.
+src/components/RightPanel.tsx(30,11): error TS6133: 'totalEnergy' is declared but its value is never read.
+src/components/Scene.tsx(81,11): error TS6133: 'timeState' is declared but its value is never read.
+src/components/Scene.tsx(82,11): error TS6133: 'mode' is declared but its value is never read.
+src/components/Scene.tsx(102,41): error TS6133: 'isHovered' is declared but its value is never read.
+src/components/Scene.tsx(168,43): error TS6133: 'isHovered' is declared but its value is never read.
+src/components/Scene.tsx(207,46): error TS6133: 'isHovered' is declared but its value is never read.
+src/components/TopBar.tsx(7,1): error TS6133: 'React' is declared but its value is never read.
+src/components/TopBar.tsx(21,23): error TS6133: 'mode' is declared but its value is never read.
+src/components/ui/Header.tsx(7,46): error TS2307: Cannot find module '@/store/appStore' or its corresponding type declarations.
+src/components/ui/Header.tsx(22,38): error TS7006: Parameter 's' implicitly has an 'any' type.
+src/components/ui/Header.tsx(23,34): error TS7006: Parameter 's' implicitly has an 'any' type.
+src/components/ui/Header.tsx(42,31): error TS7006: Parameter 's' implicitly has an 'any' type.
+src/components/ui/PropertiesPanel.tsx(7,46): error TS2307: Cannot find module '@/store/appStore' or its corresponding type declarations.
+src/components/ui/PropertiesPanel.tsx(42,52): error TS2339: Property 'selectedObjectId' does not exist on type 'SimulationState'.
+src/components/ui/PropertiesPanel.tsx(44,57): error TS2339: Property 'physicsSettings' does not exist on type 'SimulationState'.
+src/components/ui/PropertiesPanel.tsx(45,63): error TS2339: Property 'updatePhysicsSettings' does not exist on type 'SimulationState'.
+src/components/ui/PropertiesPanel.tsx(65,55): error TS2339: Property 'mass' does not exist on type 'CosmicObject'.
+src/components/ui/PropertiesPanel.tsx(71,55): error TS2339: Property 'position' does not exist on type 'CosmicObject'.
+src/components/ui/PropertiesPanel.tsx(76,55): error TS2339: Property 'position' does not exist on type 'CosmicObject'.
+src/components/ui/PropertiesPanel.tsx(81,55): error TS2339: Property 'position' does not exist on type 'CosmicObject'.
+src/components/ui/PropertiesPanel.tsx(86,55): error TS2339: Property 'velocity' does not exist on type 'CosmicObject'.
+src/components/ui/PropertiesPanel.tsx(240,31): error TS7006: Parameter 's' implicitly has an 'any' type.
+src/components/ui/Sidebar.tsx(8,46): error TS2307: Cannot find module '@/store/appStore' or its corresponding type declarations.
+src/components/ui/Sidebar.tsx(55,11): error TS6133: 'confirmPlacement' is declared but its value is never read.
+src/components/ui/Sidebar.tsx(56,11): error TS6133: 'cursorPosition' is declared but its value is never read.
+src/components/ui/Sidebar.tsx(73,23): error TS2345: Argument of type '{ type: CosmicObjectType; position: Vector3; velocity: Vector3; mass: number; properties: Record<string, unknown>; }' is not assignable to parameter of type 'CosmicObject'.
+  Type '{ type: CosmicObjectType; position: Vector3; velocity: Vector3; mass: number; properties: Record<string, unknown>; }' is missing the following properties from type 'CosmicObject': id, state, visual, metadata, and 2 more.
+src/components/ui/Sidebar.tsx(122,70): error TS2551: Property 'clearAllObjects' does not exist on type 'SimulationState'. Did you mean 'clearObjects'?
+src/components/ui/Sidebar.tsx(136,47): error TS2353: Object literal may only specify known properties, and 'spectralClass' does not exist in type 'PhysicalProperties'.
+src/components/ui/Sidebar.tsx(143,47): error TS2353: Object literal may only specify known properties, and 'color' does not exist in type 'PhysicalProperties'.
+src/components/ui/Sidebar.tsx(150,47): error TS2353: Object literal may only specify known properties, and 'color' does not exist in type 'PhysicalProperties'.
+src/components/ui/Sidebar.tsx(249,31): error TS7006: Parameter 's' implicitly has an 'any' type.
+src/components/ui/Timeline.tsx(8,46): error TS2307: Cannot find module '@/store/appStore' or its corresponding type declarations.
+src/components/ui/Timeline.tsx(24,31): error TS7006: Parameter 's' implicitly has an 'any' type.
+src/components/ui/Timeline.tsx(27,51): error TS2339: Property 'isRunning' does not exist on type 'SimulationState'.
+src/components/ui/Timeline.tsx(28,50): error TS2339: Property 'isPaused' does not exist on type 'SimulationState'.
+src/components/ui/Timeline.tsx(29,56): error TS2339: Property 'simulationTime' does not exist on type 'SimulationState'.
+src/components/ui/Timeline.tsx(30,57): error TS2339: Property 'physicsSettings' does not exist on type 'SimulationState'.
+src/components/ui/Timeline.tsx(33,47): error TS2339: Property 'start' does not exist on type 'SimulationState'.
+src/components/ui/Timeline.tsx(35,48): error TS2339: Property 'resume' does not exist on type 'SimulationState'.
+src/components/ui/Timeline.tsx(36,46): error TS2339: Property 'stop' does not exist on type 'SimulationState'.
+src/components/ui/Timeline.tsx(37,63): error TS2339: Property 'updatePhysicsSettings' does not exist on type 'SimulationState'.
+src/data/realUniverse.ts(1,42): error TS6133: 'SpectralClass' is declared but its value is never read.

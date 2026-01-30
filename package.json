@@ -1,0 +1,73 @@
+{
+  "name": "stellarforge-enhanced",
+  "version": "1.0.0",
+  "description": "Scientific cosmic simulation platform for observing and simulating the universe",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently \"vite\" \"electron .\"",
+    "electron:build": "vite build && electron-builder",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "eslint src --ext .ts,.tsx"
+  },
+  "keywords": [
+    "cosmic",
+    "simulation",
+    "physics",
+    "astronomy",
+    "universe",
+    "scientific"
+  ],
+  "author": "StellarForge Team",
+  "license": "MIT",
+  "dependencies": {
+    "@react-three/drei": "^9.92.7",
+    "@react-three/fiber": "^8.15.12",
+    "immer": "^10.0.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "three": "^0.160.0",
+    "zustand": "^4.4.7"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.45",
+    "@types/react-dom": "^18.2.18",
+    "@types/three": "^0.160.0",
+    "@typescript-eslint/eslint-plugin": "^6.16.0",
+    "@typescript-eslint/parser": "^6.16.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.10",
+    "vitest": "^1.1.0",
+    "wait-on": "^9.0.3"
+  },
+  "build": {
+    "appId": "com.stellarforge.enhanced",
+    "productName": "StellarForge Enhanced",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "target": "dir",
+      "extraFiles": [
+        {
+          "from": "node_modules/electron/dist/ffmpeg.dll",
+          "to": "."
+        }
+      ]
+    }
+  }
+}
