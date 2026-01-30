@@ -47,7 +47,7 @@ export function TopBar() {
                     <circle cx="12" cy="4" r="2" fill="#7c5cff" />
                     <circle cx="20" cy="12" r="1.5" fill="#34d399" />
                 </svg>
-                <h1 className="topbar__title">StellarForge-Enhanced</h1>
+                <h1 className="topbar__title">CelestialMechanics</h1>
             </div>
 
             {/* Mode switch */}
