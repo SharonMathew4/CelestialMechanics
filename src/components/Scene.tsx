@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { useSimulationStore, useCameraState, useTimeState } from '@/store';
 import { usePlacementStore } from '@/store/placementStore';
 import { CosmicObject, CosmicObjectType, SpectralClass } from '@/engine/physics/types';
+import PostProcessing from '@/components/graphics/PostProcessing';
 import { Vector3 } from '@/engine/physics/vector';
 import {
     createStar,
@@ -636,6 +637,8 @@ function SceneContent() {
                 maxDistance={10000}
                 zoomSpeed={1.5}
             />
+            {/* Post-processing effects */}
+            <PostProcessing />
         </>
     );
 }
@@ -649,11 +652,14 @@ export function Scene() {
     return (
         <Canvas
             gl={{
-                antialias: false,
+                antialias: true, // Enable for better quality (SMAA will handle AA)
                 powerPreference: 'high-performance',
                 alpha: false,
                 stencil: false,
                 depth: true,
+                toneMapping: THREE.ACESFilmicToneMapping, // HDR tone mapping
+                toneMappingExposure: 1.0,
+                outputColorSpace: THREE.SRGBColorSpace,
             }}
             dpr={[1, 1.5]} // Cap DPR for performance
             style={{ background: '#000' }}
