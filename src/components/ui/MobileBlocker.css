@@ -1,0 +1,143 @@
+.mobile-blocker {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.mobile-blocker__content {
+  max-width: 500px;
+  text-align: center;
+  animation: fadeInUp 0.6s ease-out;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.mobile-blocker__icon {
+  width: 80px;
+  height: 80px;
+  color: #7c5cff;
+  margin-bottom: 24px;
+  filter: drop-shadow(0 0 20px rgba(124, 92, 255, 0.3));
+}
+
+.mobile-blocker__title {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: #ffffff;
+  text-shadow: 0 0 30px rgba(124, 92, 255, 0.5);
+}
+
+.mobile-blocker__message {
+  font-size: 1.1rem;
+  line-height: 1.6;
+  margin-bottom: 32px;
+  color: #b0b0b0;
+}
+
+.mobile-blocker__message strong {
+  color: #7c5cff;
+  font-weight: 600;
+}
+
+.mobile-blocker__suggestion {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(124, 92, 255, 0.3);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+.mobile-blocker__suggestion p {
+  margin-bottom: 12px;
+  font-weight: 500;
+}
+
+.mobile-blocker__suggestion ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mobile-blocker__suggestion li {
+  padding: 8px 0;
+  padding-left: 24px;
+  position: relative;
+}
+
+.mobile-blocker__suggestion li::before {
+  content: '→';
+  position: absolute;
+  left: 0;
+  color: #7c5cff;
+  font-weight: bold;
+}
+
+.mobile-blocker__warning {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #ff6b6b;
+  font-size: 0.9rem;
+}
+
+.mobile-blocker__footer {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 16px;
+  font-size: 0.9rem;
+  color: #909090;
+}
+
+.mobile-blocker__footer p {
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #c0c0c0;
+}
+
+.mobile-blocker__footer ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mobile-blocker__footer li {
+  padding: 4px 0;
+  font-size: 0.85rem;
+}
+
+@media (max-height: 600px) {
+  .mobile-blocker__content {
+    padding: 40px 20px;
+  }
+  
+  .mobile-blocker__icon {
+    width: 60px;
+    height: 60px;
+  }
+  
+  .mobile-blocker__title {
+    font-size: 1.5rem;
+  }
+}

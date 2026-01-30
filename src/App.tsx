@@ -4,9 +4,11 @@
  * Root component that assembles the full application layout.
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Scene, TopBar, LeftPanel, RightPanel, BottomPanel } from '@/components';
 import { useSimulationStore, usePanels } from '@/store';
+import MobileBlocker from '@/components/ui/MobileBlocker';
+import { shouldBlockAccess, getDeviceType } from '@/utils/deviceDetection';
 
 /**
  * Keyboard shortcut handler
@@ -53,9 +55,25 @@ function useKeyboardShortcuts() {
  */
 export function App() {
     const panels = usePanels();
+    const [isBlocked, setIsBlocked] = useState(false);
+    const [deviceType, setDeviceType] = useState<'mobile' | 'tablet'>('mobile');
+
+    // Check for mobile device on mount
+    useEffect(() => {
+        const blocked = shouldBlockAccess();
+        setIsBlocked(blocked);
+        if (blocked) {
+            setDeviceType(getDeviceType() === 'tablet' ? 'tablet' : 'mobile');
+        }
+    }, []);
 
     // Set up keyboard shortcuts
     useKeyboardShortcuts();
+
+    // If mobile device, show blocker
+    if (isBlocked) {
+        return <MobileBlocker deviceType={deviceType} />;
+    }
 
     // Build layout class based on panel visibility
     const layoutClasses = [
