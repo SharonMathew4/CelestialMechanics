@@ -1,6 +1,6 @@
 # CelestialMechanics
 
-![CelestialMechanics Banner](public/logo.png)
+**Live Preview:** https://celestial-mechanics.vercel.app/
 
 **CelestialMechanics** is a scientifically accurate, visually stunning 3D space simulation platform. It allows users to observe and simulate the universe using realistic N-body physics, rendering celestial bodies from comets to black holes with high-fidelity visuals.
 
