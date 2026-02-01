@@ -1,188 +1,38 @@
 /**
- * Cosmic Fabric - Left Panel Component
- * 
- * Object spawning tools with PLACEMENT MODE.
- * Objects are NOT created on click - they enter placement mode first.
+ * New Left Panel - 3-Section Accordion Design
+ * Sections: Add Objects | Edit | Properties
  */
 
-import { useEffect } from 'react';
-import { useSimulationStore, useAppMode, useSelectionState } from '@/store';
+import { useState, useEffect } from 'react';
+import { useSimulationStore, useSelectionState } from '@/store';
 import { usePlacementStore } from '@/store/placementStore';
-import { CosmicObjectType, SpectralClass } from '@/engine/physics/types';
+import { useUIStore } from '@/store/uiStore';
+import { getObjectsByCategory, ObjectTemplate } from '@/data/objectLibrary';
+import './LeftPanel.css';
 
 /**
- * Object type button - starts placement mode
+ * Collapsible Section Component
  */
-interface PlacementButtonProps {
-    label: string;
-    color: string;
-    objectType: CosmicObjectType;
-    config?: Record<string, unknown>;
-    disabled?: boolean;
+interface SectionProps {
+    title: string;
+    isOpen: boolean;
+    onToggle: () => void;
+    children: React.ReactNode;
 }
 
-function PlacementButton({ label, color, objectType, config, disabled }: PlacementButtonProps) {
-    const startPlacement = usePlacementStore((s) => s.startPlacement);
-    const isPlacing = usePlacementStore((s) => s.isPlacing);
-    const currentType = usePlacementStore((s) => s.objectType);
-
-    const isActive = isPlacing && currentType === objectType;
-
+function CollapsibleSection({ title, isOpen, onToggle, children }: SectionProps) {
     return (
-        <button
-            className={`btn ${isActive ? 'btn--active' : ''}`}
-            onClick={() => startPlacement(objectType, config)}
-            disabled={disabled || (isPlacing && !isActive)}
-            style={{
-                '--btn-accent': color,
-                borderLeftColor: color,
-                borderLeftWidth: '3px',
-                backgroundColor: isActive ? 'rgba(74, 158, 255, 0.2)' : undefined,
-            } as React.CSSProperties}
-        >
-            {isActive ? `Placing ${label}...` : label}
-        </button>
-    );
-}
-
-/**
- * Property editor for selected object
- */
-function PropertyEditor() {
-    const selection = useSelectionState();
-    const objects = useSimulationStore((s) => s.objects);
-
-    if (selection.selectedIds.length === 0) {
-        return (
-            <div className="panel-section">
-                <p className="text-secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
-                    Select an object to view its properties.
-                </p>
-            </div>
-        );
-    }
-
-    const selectedId = selection.selectedIds[0];
-    const obj = objects.get(selectedId);
-
-    if (!obj) return null;
-
-    const formatScientific = (value: number) => {
-        if (Math.abs(value) < 0.001 || Math.abs(value) > 1e6) {
-            return value.toExponential(2);
-        }
-        return value.toFixed(2);
-    };
-
-    return (
-        <div className="panel-section">
-            <div className="panel-section__title">Selected Object</div>
-
-            <div className="data-readout">
-                <div className="data-row">
-                    <span className="data-row__label">Name</span>
-                    <span className="data-row__value">{obj.metadata.name}</span>
-                </div>
-                <div className="data-row">
-                    <span className="data-row__label">Type</span>
-                    <span className="data-row__value">{obj.type}</span>
-                </div>
-                <div className="data-row">
-                    <span className="data-row__label">Mass</span>
-                    <span className="data-row__value">
-                        {formatScientific(obj.properties.mass)}
-                        <span className="data-row__unit">kg</span>
-                    </span>
-                </div>
-                <div className="data-row">
-                    <span className="data-row__label">Radius</span>
-                    <span className="data-row__value">
-                        {formatScientific(obj.properties.radius)}
-                        <span className="data-row__unit">m</span>
-                    </span>
-                </div>
-                <div className="data-row">
-                    <span className="data-row__label">Velocity</span>
-                    <span className="data-row__value">
-                        {formatScientific(obj.state.velocity.magnitude())}
-                        <span className="data-row__unit">m/s</span>
-                    </span>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-/**
- * Placement instructions
- */
-function PlacementInstructions() {
-    const isPlacing = usePlacementStore((s) => s.isPlacing);
-    const objectType = usePlacementStore((s) => s.objectType);
-    const cancelPlacement = usePlacementStore((s) => s.cancelPlacement);
-
-    if (!isPlacing) return null;
-
-    return (
-        <div className="panel-section" style={{
-            backgroundColor: 'rgba(74, 158, 255, 0.1)',
-            borderRadius: 'var(--radius-md)',
-            padding: 'var(--spacing-3)'
-        }}>
-            <div className="panel-section__title" style={{ color: 'var(--color-accent-primary)' }}>
-                Placement Mode
-            </div>
-            <p style={{ fontSize: 'var(--font-size-xs)', marginBottom: 'var(--spacing-2)' }}>
-                Placing: <strong>{objectType}</strong>
-            </p>
-            <ul style={{ fontSize: 'var(--font-size-xs)', paddingLeft: 'var(--spacing-4)', marginBottom: 'var(--spacing-3)' }}>
-                <li><strong>Click</strong> to set position</li>
-                <li><strong>Drag</strong> to set velocity direction</li>
-                <li><strong>Click again</strong> to confirm</li>
-                <li><strong>ESC</strong> or right-click to cancel</li>
-            </ul>
-            <button className="btn btn--ghost" onClick={cancelPlacement} style={{ width: '100%' }}>
-                Cancel Placement
+        <div className="panel-section panel-section--collapsible">
+            <button
+                className={`panel-section__header ${isOpen ? 'panel-section__header--open' : ''}`}
+                onClick={onToggle}
+            >
+                <span className="panel-section__title">{title}</span>
+                <span className="panel-section__icon">{isOpen ? '▼' : '▶'}</span>
             </button>
-        </div>
-    );
-}
-
-/**
- * Grid snapping controls
- */
-function GridControls() {
-    const gridSnappingEnabled = usePlacementStore((s) => s.gridSnappingEnabled);
-    const gridSnapSize = usePlacementStore((s) => s.gridSnapSize);
-    const setGridSnapping = usePlacementStore((s) => s.setGridSnapping);
-    const setGridSnapSize = usePlacementStore((s) => s.setGridSnapSize);
-
-    return (
-        <div className="panel-section">
-            <div className="panel-section__title">Grid Settings</div>
-            <label className="checkbox">
-                <input
-                    type="checkbox"
-                    className="checkbox__input"
-                    checked={gridSnappingEnabled}
-                    onChange={(e) => setGridSnapping(e.target.checked)}
-                />
-                <span className="checkbox__label">Enable Grid Snapping</span>
-            </label>
-            {gridSnappingEnabled && (
-                <div className="control-group" style={{ marginTop: 'var(--spacing-2)' }}>
-                    <label className="control-group__label">
-                        Grid Size: {gridSnapSize}
-                    </label>
-                    <input
-                        type="range"
-                        min="1"
-                        max="20"
-                        step="1"
-                        value={gridSnapSize}
-                        onChange={(e) => setGridSnapSize(parseInt(e.target.value))}
-                        className="slider"
-                    />
+            {isOpen && (
+                <div className="panel-section__content">
+                    {children}
                 </div>
             )}
         </div>
@@ -190,105 +40,220 @@ function GridControls() {
 }
 
 /**
- * Left panel component
+ * Object Template Button
+ */
+interface ObjectButtonProps {
+    template: ObjectTemplate;
+    onClick: () => void;
+    isActive: boolean;
+}
+
+function ObjectButton({ template, isActive, onClick }: ObjectButtonProps) {
+    return (
+        <button
+            className={`object-btn ${isActive ? 'object-btn--active' : ''}`}
+            onClick={onClick}
+            style={{
+                borderLeftColor: template.color,
+                backgroundColor: isActive ? 'rgba(74, 158, 255, 0.15)' : undefined,
+            }}
+        >
+            <span className="object-btn__icon">{template.icon}</span>
+            <span className="object-btn__name">{template.name}</span>
+        </button>
+    );
+}
+
+/**
+ * ADD OBJECTS SECTION
+ */
+function AddObjectsSection({ isOpen, onToggle }: { isOpen: boolean; onToggle: () => void }) {
+    const [activeCategory, setActiveCategory] = useState<'celestial' | 'structure'>('celestial');
+    const [expandedSubcategories, setExpandedSubcategories] = useState<string[]>(['Stars - Main Sequence']);
+
+    const startPlacement = usePlacementStore((s) => s.startPlacement);
+    const { isPlacing, objectType } = usePlacementStore();
+
+    const celestialGroups = getObjectsByCategory('celestial');
+    const structureGroups = getObjectsByCategory('structure');
+
+    const currentGroups = activeCategory === 'celestial' ? celestialGroups : structureGroups;
+
+    const toggleSubcategory = (subcategory: string) => {
+        setExpandedSubcategories(prev =>
+            prev.includes(subcategory)
+                ? prev.filter(s => s !== subcategory)
+                : [...prev, subcategory]
+        );
+    };
+
+    return (
+        <CollapsibleSection title="Add Objects" isOpen={isOpen} onToggle={onToggle}>
+            {/* Category Tabs */}
+            <div className="category-tabs">
+                <button
+                    className={`category-tab ${activeCategory === 'celestial' ? 'category-tab--active' : ''}`}
+                    onClick={() => setActiveCategory('celestial')}
+                >
+                    ⭐ Celestial Objects
+                </button>
+                <button
+                    className={`category-tab ${activeCategory === 'structure' ? 'category-tab--active' : ''}`}
+                    onClick={() => setActiveCategory('structure')}
+                >
+                    🌌 Structures
+                </button>
+            </div>
+
+            {/* Object Library */}
+            <div className="object-library">
+                {Object.entries(currentGroups).map(([subcategory, templates]) => (
+                    <div key={subcategory} className="object-group">
+                        <button
+                            className="object-group__header"
+                            onClick={() => toggleSubcategory(subcategory)}
+                        >
+                            <span>{subcategory}</span>
+                            <span>{expandedSubcategories.includes(subcategory) ? '▼' : '▶'}</span>
+                        </button>
+                        {expandedSubcategories.includes(subcategory) && (
+                            <div className="object-group__items">
+                                {templates.map(template => (
+                                    <ObjectButton
+                                        key={template.id}
+                                        template={template}
+                                        isActive={isPlacing && objectType === template.defaultProperties.type}
+                                        onClick={() => startPlacement(
+                                            template.defaultProperties.type,
+                                            template.defaultProperties.config
+                                        )}
+                                    />
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+
+            {/* Placement Instructions */}
+            {isPlacing && (
+                <div className="placement-hint">
+                    <strong>Placement Mode Active</strong>
+                    <p>Click to position → Drag for velocity → Click to confirm</p>
+                </div>
+            )}
+        </CollapsibleSection>
+    );
+}
+
+/**
+ * EDIT SECTION
+ */
+function EditSection({ isOpen, onToggle }: { isOpen: boolean; onToggle: () => void }) {
+    const selection = useSelectionState();
+    const objects = useSimulationStore((s) => s.objects);
+    const updateObject = useSimulationStore((s) => s.updateObject);
+
+    const selectedId = selection.selectedIds[0];
+    const obj = selectedId ? objects.get(selectedId) : null;
+
+    if (!obj) {
+        return (
+            <CollapsibleSection title="Edit" isOpen={isOpen} onToggle={onToggle}>
+                <p className="text-muted">Select an object to edit its properties</p>
+            </CollapsibleSection>
+        );
+    }
+
+    // Simplified property editor - can be expanded
+    return (
+        <CollapsibleSection title="Edit" isOpen={isOpen} onToggle={onToggle}>
+            <div className="property-editor">
+                <div className="property-row">
+                    <label>Name</label>
+                    <input type="text" value={obj.metadata.name} readOnly />
+                </div>
+                <div className="property-row">
+                    <label>Type</label>
+                    <input type="text" value={obj.type} readOnly />
+                </div>
+                <div className="property-row">
+                    <label>Mass (kg)</label>
+                    <input type="number" value={obj.properties.mass} readOnly />
+                </div>
+                <div className="property-row">
+                    <label>Radius (m)</label>
+                    <input type="number" value={obj.properties.radius} readOnly />
+                </div>
+                <p className="text-muted" style={{ marginTop: '1rem', fontSize: '0.75rem' }}>
+                    Full editing capabilities coming soon
+                </p>
+            </div>
+        </CollapsibleSection>
+    );
+}
+
+/**
+ * PROPERTIES SECTION
+ */
+function PropertiesSection({ isOpen, onToggle }: { isOpen: boolean; onToggle: () => void }) {
+    const toggleRightPanel = useUIStore((s) => s.togglePanel);
+
+    const handleClick = () => {
+        onToggle();
+        // Also toggle right panel to show universe stats
+        toggleRightPanel('right');
+    };
+
+    return (
+        <CollapsibleSection title="Properties" isOpen={isOpen} onToggle={handleClick}>
+            <p className="text-muted">
+                Universe statistics are displayed in the right panel when this section is open.
+            </p>
+        </CollapsibleSection>
+    );
+}
+
+/**
+ * MAIN LEFT PANEL
  */
 export function LeftPanel() {
-    const mode = useAppMode();
+    const [openSection, setOpenSection] = useState<'add' | 'edit' | 'properties' | null>('add');
     const cancelPlacement = usePlacementStore((s) => s.cancelPlacement);
     const isPlacing = usePlacementStore((s) => s.isPlacing);
 
-    const isSimulationMode = mode === 'simulation';
-
-    // Cancel placement on ESC key
+    // Cancel placement on ESC
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape' && isPlacing) {
                 cancelPlacement();
             }
         };
-
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isPlacing, cancelPlacement]);
 
-    // Cancel placement when switching to observation mode
-    useEffect(() => {
-        if (!isSimulationMode && isPlacing) {
-            cancelPlacement();
-        }
-    }, [isSimulationMode, isPlacing, cancelPlacement]);
-
     return (
         <aside className="panel panel-left">
             <div className="panel__header">
-                <h2 className="panel__title">Objects</h2>
+                <h2 className="panel__title">Controls</h2>
             </div>
 
             <div className="panel__content">
-                {/* Placement instructions (when active) */}
-                <PlacementInstructions />
+                <AddObjectsSection
+                    isOpen={openSection === 'add'}
+                    onToggle={() => setOpenSection(openSection === 'add' ? null : 'add')}
+                />
 
-                {/* Spawn section - only in simulation mode */}
-                {isSimulationMode && !isPlacing && (
-                    <div className="panel-section">
-                        <div className="panel-section__title">Create Objects</div>
-                        <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', marginBottom: 'var(--spacing-3)' }}>
-                            Click a button, then click in scene to position. Drag to set velocity.
-                        </p>
+                <EditSection
+                    isOpen={openSection === 'edit'}
+                    onToggle={() => setOpenSection(openSection === 'edit' ? null : 'edit')}
+                />
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-2)' }}>
-                            <PlacementButton
-                                label="G-Type Star (Sun-like)"
-                                color="#fff4ea"
-                                objectType={CosmicObjectType.STAR}
-                                config={{ spectralClass: SpectralClass.G }}
-                            />
-                            <PlacementButton
-                                label="O-Type Star (Blue Giant)"
-                                color="#9bb0ff"
-                                objectType={CosmicObjectType.STAR}
-                                config={{ spectralClass: SpectralClass.O }}
-                            />
-                            <PlacementButton
-                                label="M-Type Star (Red Dwarf)"
-                                color="#ffcc6f"
-                                objectType={CosmicObjectType.STAR}
-                                config={{ spectralClass: SpectralClass.M }}
-                            />
-                            <PlacementButton
-                                label="Rocky Planet"
-                                color="#8b7355"
-                                objectType={CosmicObjectType.PLANET}
-                            />
-                            <PlacementButton
-                                label="Black Hole"
-                                color="#7c5cff"
-                                objectType={CosmicObjectType.BLACK_HOLE}
-                            />
-                            <PlacementButton
-                                label="Neutron Star"
-                                color="#aaccff"
-                                objectType={CosmicObjectType.NEUTRON_STAR}
-                            />
-                        </div>
-                    </div>
-                )}
-
-                {/* Grid controls */}
-                {isSimulationMode && <GridControls />}
-
-                {/* Observation mode message */}
-                {!isSimulationMode && (
-                    <div className="panel-section">
-                        <p className="text-secondary" style={{ fontSize: 'var(--font-size-xs)' }}>
-                            <strong>Observation Mode</strong><br />
-                            Object creation is disabled. Switch to Simulation Mode to create and modify objects.
-                        </p>
-                    </div>
-                )}
-
-                {/* Property editor */}
-                <PropertyEditor />
+                <PropertiesSection
+                    isOpen={openSection === 'properties'}
+                    onToggle={() => setOpenSection(openSection === 'properties' ? null : 'properties')}
+                />
             </div>
         </aside>
     );

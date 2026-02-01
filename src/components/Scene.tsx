@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { useSimulationStore, useCameraState, useTimeState } from '@/store';
 import { usePlacementStore } from '@/store/placementStore';
 import { CosmicObject, CosmicObjectType, SpectralClass } from '@/engine/physics/types';
-import PostProcessing from '@/components/graphics/PostProcessing';
+// import PostProcessing from '@/components/graphics/PostProcessing'; // Temporarily disabled
 import { Vector3 } from '@/engine/physics/vector';
 import {
     createStar,
@@ -152,13 +152,6 @@ function StarMesh({ object, isSelected, isHovered, onSelect, onHover }: StarMesh
                 />
             </mesh>
 
-            {/* Selection indicator */}
-            {isSelected && (
-                <mesh scale={2}>
-                    <ringGeometry args={[visualRadius * 1.2, visualRadius * 1.3, 32]} />
-                    <meshBasicMaterial color="#4a9eff" side={THREE.DoubleSide} />
-                </mesh>
-            )}
         </group>
     );
 }
@@ -191,13 +184,6 @@ function PlanetMesh({ object, isSelected, isHovered, onSelect, onHover }: StarMe
                 <meshStandardMaterial color={color} roughness={0.8} metalness={0.2} />
             </mesh>
 
-            {/* Selection indicator */}
-            {isSelected && (
-                <mesh>
-                    <ringGeometry args={[visualRadius * 1.3, visualRadius * 1.4, 32]} />
-                    <meshBasicMaterial color="#4a9eff" side={THREE.DoubleSide} />
-                </mesh>
-            )}
         </group>
     );
 }
@@ -253,12 +239,6 @@ function BlackHoleMesh({ object, isSelected, isHovered, onSelect, onHover }: Sta
                 />
             </mesh>
 
-            {isSelected && (
-                <mesh>
-                    <ringGeometry args={[visualRadius * 4.5, visualRadius * 4.7, 32]} />
-                    <meshBasicMaterial color="#4a9eff" side={THREE.DoubleSide} />
-                </mesh>
-            )}
         </group>
     );
 }
@@ -330,7 +310,9 @@ function PlacementPreview() {
     const cursorPosition = usePlacementStore((s) => s.cursorPosition);
     const fixedPosition = usePlacementStore((s) => s.fixedPosition);
     const velocityVector = usePlacementStore((s) => s.velocityVector);
+    const yOffset = usePlacementStore((s) => s.yOffset);
     const updateCursorPosition = usePlacementStore((s) => s.updateCursorPosition);
+    const setYOffset = usePlacementStore((s) => s.setYOffset);
     const confirmPosition = usePlacementStore((s) => s.confirmPosition);
     const confirmPlacement = usePlacementStore((s) => s.confirmPlacement);
     const cancelPlacement = usePlacementStore((s) => s.cancelPlacement);
@@ -339,6 +321,20 @@ function PlacementPreview() {
 
     const { camera, raycaster, pointer } = useThree();
     const planeRef = useRef<THREE.Mesh>(null);
+
+    // Mouse wheel handler for Y-axis control
+    useEffect(() => {
+        if (!isPlacing) return;
+
+        const handleWheel = (e: WheelEvent) => {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? -0.5 : 0.5; // Scroll down = lower, scroll up = higher
+            setYOffset(yOffset + delta);
+        };
+
+        window.addEventListener('wheel', handleWheel, { passive: false });
+        return () => window.removeEventListener('wheel', handleWheel);
+    }, [isPlacing, yOffset, setYOffset]);
 
     // Track mouse position and update cursor
     useFrame(() => {
@@ -363,8 +359,8 @@ function PlacementPreview() {
         let pos = new Vector3(fixedPosition.x, fixedPosition.y, fixedPosition.z);
         let vel = new Vector3(velocityVector.x, velocityVector.y, velocityVector.z);
 
-        const dt = 0.1; // Time step for trajectory simulation
-        const steps = 50; // Number of trajectory points
+        const dt = 0.05; // Smaller time step for smoother curves
+        const steps = 100; // More points for better curvature visibility
 
         // Simple trajectory simulation considering gravity from existing objects
         for (let i = 0; i < steps; i++) {
@@ -395,7 +391,7 @@ function PlacementPreview() {
                 }
             }
 
-            // Update velocity and position
+            // Update velocity and position using Euler integration
             vel = new Vector3(vel.x + accX * dt, vel.y + accY * dt, vel.z + accZ * dt);
             pos = new Vector3(pos.x + vel.x * dt, pos.y + vel.y * dt, pos.z + vel.z * dt);
         }
@@ -496,29 +492,35 @@ function PlacementPreview() {
                 <meshBasicMaterial transparent opacity={0} />
             </mesh>
 
-            {/* Ghost preview sphere at display position */}
+            {/* Ghost preview sphere at display position - Smooth sphere */}
             <group position={displayPosition}>
+                {/* Main ghost sphere */}
                 <mesh>
+                    <sphereGeometry args={[1, 32, 32]} />
+                    <meshStandardMaterial
+                        color={previewColor}
+                        transparent
+                        opacity={0.35}
+                        emissive={previewColor}
+                        emissiveIntensity={0.4}
+                        roughness={0.4}
+                        metalness={0.1}
+                    />
+                </mesh>
+                {/* Outer glow */}
+                <mesh scale={1.3}>
                     <sphereGeometry args={[1, 16, 16]} />
                     <meshBasicMaterial
                         color={previewColor}
                         transparent
-                        opacity={0.5}
-                        wireframe
-                    />
-                </mesh>
-                {/* Outer glow */}
-                <mesh scale={1.5}>
-                    <sphereGeometry args={[1, 8, 8]} />
-                    <meshBasicMaterial
-                        color={previewColor}
-                        transparent
-                        opacity={0.2}
+                        opacity={0.15}
+                        side={THREE.BackSide}
+                        depthWrite={false}
                     />
                 </mesh>
                 {/* Position indicator ring */}
                 <mesh rotation={[Math.PI / 2, 0, 0]}>
-                    <ringGeometry args={[1.5, 2, 32]} />
+                    <ringGeometry args={[1.5, 1.6, 32]} />
                     <meshBasicMaterial
                         color={previewColor}
                         transparent
@@ -544,7 +546,7 @@ function PlacementPreview() {
                                 itemSize={3}
                             />
                         </bufferGeometry>
-                        <lineBasicMaterial color="#00ff88" linewidth={3} />
+                        <lineBasicMaterial color="#ffffff" linewidth={3} />
                     </line>
 
                     {/* Arrowhead */}
@@ -561,7 +563,7 @@ function PlacementPreview() {
                         ]}
                     >
                         <coneGeometry args={[0.3, 0.8, 8]} />
-                        <meshBasicMaterial color="#00ff88" />
+                        <meshBasicMaterial color="#ffffff" />
                     </mesh>
                 </group>
             )}
@@ -577,7 +579,7 @@ function PlacementPreview() {
                             itemSize={3}
                         />
                     </bufferGeometry>
-                    <lineBasicMaterial color="#ffaa00" transparent opacity={0.7} />
+                    <lineBasicMaterial color="#ffffff" transparent opacity={0.8} />
                 </line>
             )}
         </>
@@ -638,7 +640,7 @@ function SceneContent() {
                 zoomSpeed={1.5}
             />
             {/* Post-processing effects */}
-            <PostProcessing />
+            {/* <PostProcessing /> */}
         </>
     );
 }

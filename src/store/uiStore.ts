@@ -99,11 +99,11 @@ export interface UIState {
 }
 
 /**
- * Default panel state
+ * Default panel state - Right panel hidden by default
  */
 const DEFAULT_PANELS: PanelState = {
     left: true,
-    right: true,
+    right: false, // Hidden by default, shown when Properties clicked
     bottom: true,
     top: true,
 };

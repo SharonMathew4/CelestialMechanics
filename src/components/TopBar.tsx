@@ -1,42 +1,15 @@
 /**
  * Cosmic Fabric - Top Bar Component
  * 
- * Application header with mode toggle and global controls.
+ * Simplified application header with logo and minimal controls.
  */
 
 import React from 'react';
-import { useSimulationStore, useAppMode } from '@/store';
-import { AppMode } from '@/store/simulationStore';
 
 /**
- * Mode toggle button
- */
-interface ModeButtonProps {
-    mode: AppMode;
-    label: string;
-    isActive: boolean;
-    onClick: () => void;
-}
-
-function ModeButton({ mode, label, isActive, onClick }: ModeButtonProps) {
-    return (
-        <button
-            className={`mode-toggle__btn ${isActive ? 'mode-toggle__btn--active' : ''}`}
-            onClick={onClick}
-            aria-pressed={isActive}
-        >
-            {label}
-        </button>
-    );
-}
-
-/**
- * Top bar component
+ * Top bar component - Simplified
  */
 export function TopBar() {
-    const mode = useAppMode();
-    const setMode = useSimulationStore((s) => s.setMode);
-
     return (
         <header className="topbar">
             {/* Logo and title */}
@@ -50,23 +23,7 @@ export function TopBar() {
                 <h1 className="topbar__title">CelestialMechanics</h1>
             </div>
 
-            {/* Mode switch */}
-            <div className="mode-toggle">
-                <ModeButton
-                    mode="observation"
-                    label="Observation"
-                    isActive={mode === 'observation'}
-                    onClick={() => setMode('observation')}
-                />
-                <ModeButton
-                    mode="simulation"
-                    label="Simulation"
-                    isActive={mode === 'simulation'}
-                    onClick={() => setMode('simulation')}
-                />
-            </div>
-
-            {/* Right controls */}
+            {/* Right controls - Essential only */}
             <div className="topbar__controls">
                 <button className="btn btn--ghost btn--icon" title="Settings">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

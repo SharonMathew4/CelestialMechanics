@@ -67,6 +67,12 @@ export function App() {
         }
     }, []);
 
+    // Initialize physics worker on mount
+    const init = useSimulationStore((s) => s.init);
+    useEffect(() => {
+        init();
+    }, [init]);
+
     // Set up keyboard shortcuts
     useKeyboardShortcuts();
 

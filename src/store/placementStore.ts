@@ -47,6 +47,9 @@ export interface PlacementState {
     /** Velocity scale (how much cursor distance = velocity) */
     velocityScale: number;
 
+    /** Y-axis offset for mouse wheel control during placement */
+    yOffset: number;
+
     /** Placement preview configuration */
     previewConfig: {
         /** Spectral class for stars */
@@ -61,6 +64,7 @@ export interface PlacementState {
     startPlacement: (objectType: CosmicObjectType, config?: PlacementState['previewConfig']) => void;
     cancelPlacement: () => void;
     updateCursorPosition: (position: Vector3) => void;
+    setYOffset: (offset: number) => void;
 
     /** Phase 1: Click to set position, enter velocity phase */
     confirmPosition: () => void;
@@ -103,6 +107,7 @@ export const usePlacementStore = create<PlacementState>()((set, get) => ({
     gridSnappingEnabled: true,
     gridSnapSize: 5,
     velocityScale: 0.5, // Cursor movement to velocity ratio
+    yOffset: 0, // Y-axis offset from mouse wheel
     previewConfig: {},
 
     // Start placement mode
@@ -112,6 +117,7 @@ export const usePlacementStore = create<PlacementState>()((set, get) => ({
         objectType,
         fixedPosition: null,
         velocityVector: Vector3.zero(),
+        yOffset: 0, // Reset Y offset
         previewConfig: config,
     }),
 
@@ -122,15 +128,24 @@ export const usePlacementStore = create<PlacementState>()((set, get) => ({
         objectType: null,
         fixedPosition: null,
         velocityVector: Vector3.zero(),
+        yOffset: 0,
         previewConfig: {},
     }),
 
-    // Update cursor position
+    // Update cursor position (with Y offset applied)
     updateCursorPosition: (position) => {
         const state = get();
+
+        // Apply Y offset from mouse wheel
+        const positionWithY = new Vector3(
+            position.x,
+            state.yOffset,
+            position.z
+        );
+
         const finalPosition = state.gridSnappingEnabled
-            ? snapToGrid(position, state.gridSnapSize)
-            : position;
+            ? snapToGrid(positionWithY, state.gridSnapSize)
+            : positionWithY;
 
         if (state.phase === 'velocity' && state.fixedPosition) {
             // Calculate velocity vector from fixed position to cursor
@@ -143,6 +158,14 @@ export const usePlacementStore = create<PlacementState>()((set, get) => ({
         } else {
             set({ cursorPosition: finalPosition });
         }
+    },
+
+    // Set Y offset from mouse wheel
+    setYOffset: (offset) => {
+        set({ yOffset: offset });
+        // Re-update cursor position with new offset
+        const state = get();
+        get().updateCursorPosition(new Vector3(state.cursorPosition.x, 0, state.cursorPosition.z));
     },
 
     // Phase 1: Confirm position, enter velocity phase
@@ -177,6 +200,7 @@ export const usePlacementStore = create<PlacementState>()((set, get) => ({
             objectType: null,
             fixedPosition: null,
             velocityVector: Vector3.zero(),
+            yOffset: 0,
             previewConfig: {},
         });
 
