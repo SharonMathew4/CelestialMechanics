@@ -34,7 +34,7 @@
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/yourusername/CelestialMechanics.git
+    git clone https://github.com/SharonMathew4/CelestialMechanics.git
     cd CelestialMechanics
     ```
 
