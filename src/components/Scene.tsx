@@ -2,7 +2,8 @@
  * Cosmic Fabric - 3D Scene Component
  * 
  * Main Three.js canvas using React Three Fiber.
- * Handles the 3D rendering of all cosmic objects.
+ * Handles the 3D rendering of all cosmic objects,
+ * post-processing effects, collision particles, and background stars.
  */
 
 import { useRef, useMemo, useEffect } from 'react';
@@ -13,12 +14,12 @@ import {
     AdaptiveDpr,
     AdaptiveEvents,
     Environment,
+    Stars,
 } from '@react-three/drei';
 import * as THREE from 'three';
 import { useSimulationStore, useCameraState, useTimeState } from '@/store';
 import { usePlacementStore } from '@/store/placementStore';
 import { CosmicObject, CosmicObjectType, SpectralClass } from '@/engine/physics/types';
-// import PostProcessing from '@/components/graphics/PostProcessing'; // Temporarily disabled
 import { Vector3 } from '@/engine/physics/vector';
 import {
     createStar,
@@ -26,6 +27,25 @@ import {
     createBlackHole,
     createNeutronStar,
 } from '@/engine/physics/objectFactory';
+import PostProcessing from '@/components/PostProcessing';
+import CollisionParticles from '@/components/CollisionParticles';
+import {
+    vertexShader as starVertexShader,
+    fragmentShader as starFragmentShader,
+    getStarColors,
+    getStarShaderConfig,
+} from '@/components/StarShaderMaterial';
+import {
+    vertexShader as blackHoleVertexShader,
+    fragmentShader as blackHoleFragmentShader,
+    getBlackHoleConfig,
+} from '@/components/BlackHoleShaderMaterial';
+import {
+    vertexShader as neutronStarVertexShader,
+    fragmentShader as neutronStarFragmentShader,
+    getNeutronStarConfig,
+} from '@/components/NeutronStarShaderMaterial';
+import { MagneticFieldLines, PulsarBeams } from '@/components/MagneticFieldComponents';
 
 /**
  * Performance stats overlay
@@ -75,24 +95,9 @@ function CameraController() {
 }
 
 /**
- * Simulation stepper - runs physics each frame
- * DISABLED in observation mode
+ * Star mesh component with glow
  */
-function SimulationLoop() {
-    const timeState = useTimeState();
-    const mode = useSimulationStore((s) => s.mode);
-
-    // Physics step is now handled by Web Worker
-    // We can use this loop for frame-dependent visual updates if needed
-    // or syncing time state
-
-    return null;
-}
-
-/**
- * Star mesh component
- */
-interface StarMeshProps {
+interface ObjectMeshProps {
     object: CosmicObject;
     isSelected: boolean;
     isHovered: boolean;
@@ -100,58 +105,120 @@ interface StarMeshProps {
     onHover: (hovering: boolean) => void;
 }
 
-function StarMesh({ object, isSelected, isHovered, onSelect, onHover }: StarMeshProps) {
+function StarMesh({ object, isSelected, isHovered, onSelect, onHover }: ObjectMeshProps) {
     const meshRef = useRef<THREE.Mesh>(null);
+    const shaderRef = useRef<THREE.ShaderMaterial>(null);
 
-    // Calculate visual size based on luminosity (logarithmic scale)
     const visualRadius = useMemo(() => {
         const baseRadius = 0.5;
         const lumFactor = Math.log10(object.properties.luminosity + 1) / 10;
         return baseRadius + lumFactor;
     }, [object.properties.luminosity]);
 
-    // Corona glow color
-    const color = useMemo(() => new THREE.Color(object.visual.color), [object.visual.color]);
+    // Determine spectral class from object (Star interface has it, fallback by color/temperature)
+    const spectralClass = useMemo(() => {
+        const starObj = object as any;
+        if (starObj.spectralClass) return starObj.spectralClass;
+        // Fallback: infer from temperature
+        const temp = object.properties.temperature || 5778;
+        if (temp > 30000) return 'O';
+        if (temp > 10000) return 'B';
+        if (temp > 7500) return 'A';
+        if (temp > 6000) return 'F';
+        if (temp > 5200) return 'G';
+        if (temp > 3700) return 'K';
+        return 'M';
+    }, [object]);
+
+    const colors = useMemo(() => getStarColors(spectralClass), [spectralClass]);
+    const config = useMemo(() => getStarShaderConfig(spectralClass), [spectralClass]);
+
+    const uniforms = useMemo(() => ({
+        uTime: { value: 0 },
+        uColorHot: { value: colors.hot },
+        uColorMid: { value: colors.mid },
+        uColorCool: { value: colors.cool },
+        uColorSpot: { value: colors.spot },
+        uTurbulence: { value: config.turbulence },
+        uGranulation: { value: config.granulation },
+        uLimbDarkening: { value: config.limbDarkening },
+        uEmissiveBoost: { value: config.emissiveBoost },
+        uSpotFrequency: { value: config.spotFrequency },
+    }), [colors, config]);
+
+    // Animate shader time
+    useFrame((state) => {
+        if (shaderRef.current) {
+            shaderRef.current.uniforms.uTime.value = state.clock.elapsedTime;
+        }
+    });
+
+    const baseColor = useMemo(() => new THREE.Color(object.visual.color), [object.visual.color]);
+    const pos = object.state.position;
 
     return (
-        <group position={object.state.position.toArray()}>
-            {/* Main star body */}
-            {/* Main star body - Emissive for glow */}
+        <group position={[pos.x, pos.y, pos.z]}>
+            {/* Main star body with procedural shader */}
             <mesh
                 ref={meshRef}
                 onClick={onSelect}
                 onPointerOver={() => onHover(true)}
                 onPointerOut={() => onHover(false)}
             >
-                <sphereGeometry args={[visualRadius, 32, 32]} />
-                <meshStandardMaterial
-                    color={color}
-                    emissive={color}
-                    emissiveIntensity={2.0}
+                <sphereGeometry args={[visualRadius, 64, 64]} />
+                <shaderMaterial
+                    ref={shaderRef}
+                    vertexShader={starVertexShader}
+                    fragmentShader={starFragmentShader}
+                    uniforms={uniforms}
                     toneMapped={false}
                 />
             </mesh>
 
             {/* Real light source */}
             <pointLight
-                color={color}
+                color={baseColor}
                 intensity={1.5}
                 distance={50}
                 decay={2}
             />
 
-            {/* Glow effect (Billboard-like sphere) */}
-            <mesh scale={2.0}>
+            {/* Glow effect (outer bloom halo) */}
+            <mesh scale={2.2}>
                 <sphereGeometry args={[visualRadius, 16, 16]} />
                 <meshBasicMaterial
-                    color={color}
+                    color={colors.hot}
                     transparent
-                    opacity={0.15}
+                    opacity={0.12}
                     side={THREE.BackSide}
                     depthWrite={false}
                 />
             </mesh>
 
+            {/* Inner glow corona */}
+            <mesh scale={1.4}>
+                <sphereGeometry args={[visualRadius, 16, 16]} />
+                <meshBasicMaterial
+                    color={colors.mid}
+                    transparent
+                    opacity={0.08}
+                    side={THREE.BackSide}
+                    depthWrite={false}
+                />
+            </mesh>
+
+            {/* Selection ring */}
+            {isSelected && (
+                <mesh rotation={[Math.PI / 2, 0, 0]}>
+                    <ringGeometry args={[visualRadius * 1.5, visualRadius * 1.6, 32]} />
+                    <meshBasicMaterial
+                        color="#44aaff"
+                        transparent
+                        opacity={0.8}
+                        side={THREE.DoubleSide}
+                    />
+                </mesh>
+            )}
         </group>
     );
 }
@@ -159,21 +226,20 @@ function StarMesh({ object, isSelected, isHovered, onSelect, onHover }: StarMesh
 /**
  * Planet mesh component
  */
-function PlanetMesh({ object, isSelected, isHovered, onSelect, onHover }: StarMeshProps) {
+function PlanetMesh({ object, isSelected, isHovered, onSelect, onHover }: ObjectMeshProps) {
     const meshRef = useRef<THREE.Mesh>(null);
 
-    // Calculate visual size
     const visualRadius = useMemo(() => {
-        // Scale radius for visibility (logarithmic)
         const baseRadius = 0.2;
         const radiusFactor = Math.log10(object.properties.radius / 6.371e6 + 1);
         return baseRadius + radiusFactor * 0.1;
     }, [object.properties.radius]);
 
     const color = useMemo(() => new THREE.Color(object.visual.color), [object.visual.color]);
+    const pos = object.state.position;
 
     return (
-        <group position={object.state.position.toArray()}>
+        <group position={[pos.x, pos.y, pos.z]}>
             <mesh
                 ref={meshRef}
                 onClick={onSelect}
@@ -184,61 +250,211 @@ function PlanetMesh({ object, isSelected, isHovered, onSelect, onHover }: StarMe
                 <meshStandardMaterial color={color} roughness={0.8} metalness={0.2} />
             </mesh>
 
+            {isSelected && (
+                <mesh rotation={[Math.PI / 2, 0, 0]}>
+                    <ringGeometry args={[visualRadius * 1.5, visualRadius * 1.6, 32]} />
+                    <meshBasicMaterial color="#44aaff" transparent opacity={0.8} side={THREE.DoubleSide} />
+                </mesh>
+            )}
         </group>
     );
 }
 
 /**
- * Black hole mesh component
+ * Black hole mesh component with animated accretion disk
  */
-function BlackHoleMesh({ object, isSelected, isHovered, onSelect, onHover }: StarMeshProps) {
-    const groupRef = useRef<THREE.Group>(null);
+function BlackHoleMesh({ object, isSelected, isHovered, onSelect, onHover }: ObjectMeshProps) {
+    const meshRef = useRef<THREE.Mesh>(null);
+    const shaderRef = useRef<THREE.ShaderMaterial>(null);
 
-    // Animation for gravitational distortion effect
+    // Visual radius based on mass (log scale)
+    const visualRadius = useMemo(() => {
+        return Math.max(0.8, Math.log10(object.properties.mass + 1) / 30);
+    }, [object.properties.mass]);
+
+    // Get mass in solar masses (assuming mass is in kg)
+    const solarMass = 1.989e30; // kg
+    const massInSolarMasses = object.properties.mass / solarMass;
+
+    // Get config based on mass
+    const config = useMemo(() => getBlackHoleConfig(massInSolarMasses), [massInSolarMasses]);
+
+    // Schwarzschild radius in visual units
+    const eventHorizonRadius = visualRadius * 0.5;
+    const photonSphereRadius = eventHorizonRadius * 1.5;
+    const diskInnerRadius = eventHorizonRadius * config.diskInnerRadiusMultiplier;
+    const diskOuterRadius = eventHorizonRadius * config.diskOuterRadiusMultiplier;
+
+    const uniforms = useMemo(() => ({
+        uTime: { value: 0 },
+        uEventHorizonRadius: { value: eventHorizonRadius },
+        uPhotonSphereRadius: { value: photonSphereRadius },
+        uDiskInnerRadius: { value: diskInnerRadius },
+        uDiskOuterRadius: { value: diskOuterRadius },
+        uDiskColor1: { value: config.diskColor1 },
+        uDiskColor2: { value: config.diskColor2 },
+        uDiskColor3: { value: config.diskColor3 },
+        uSpinSpeed: { value: config.spinSpeed },
+        uDopplerFactor: { value: config.dopplerFactor },
+        uLensingStrength: { value: config.lensingStrength },
+    }), [config, eventHorizonRadius, photonSphereRadius, diskInnerRadius, diskOuterRadius]);
+
+    // Animate shader
     useFrame((state) => {
-        if (groupRef.current) {
-            groupRef.current.rotation.z = state.clock.elapsedTime * 0.1;
+        if (shaderRef.current) {
+            shaderRef.current.uniforms.uTime.value = state.clock.elapsedTime;
         }
     });
 
-    const visualRadius = 0.8;
+    const pos = object.state.position;
 
     return (
         <group
-            ref={groupRef}
-            position={object.state.position.toArray()}
+            position={[pos.x, pos.y, pos.z]}
             onClick={onSelect}
             onPointerOver={() => onHover(true)}
             onPointerOut={() => onHover(false)}
         >
-            {/* Event horizon (black) */}
-            <mesh>
-                <sphereGeometry args={[visualRadius, 32, 32]} />
-                <meshBasicMaterial color="#000000" />
-            </mesh>
-
-            {/* Accretion disk */}
-            <mesh rotation={[Math.PI / 2, 0, 0]}>
-                <ringGeometry args={[visualRadius * 1.5, visualRadius * 4, 64]} />
-                <meshBasicMaterial
-                    color="#ff6600"
+            {/* Main black hole sphere with shader */}
+            <mesh ref={meshRef}>
+                <sphereGeometry args={[diskOuterRadius * 1.2, 128, 128]} />
+                <shaderMaterial
+                    ref={shaderRef}
+                    vertexShader={blackHoleVertexShader}
+                    fragmentShader={blackHoleFragmentShader}
+                    uniforms={uniforms}
+                    toneMapped={false}
                     transparent
-                    opacity={0.7}
-                    side={THREE.DoubleSide}
+                    depthWrite={false}
                 />
             </mesh>
 
-            {/* Outer glow */}
-            <mesh>
-                <sphereGeometry args={[visualRadius * 1.2, 16, 16]} />
+            {/* Selection ring */}
+            {isSelected && (
+                <mesh rotation={[Math.PI / 2, 0, 0]}>
+                    <ringGeometry args={[diskOuterRadius * 1.3, diskOuterRadius * 1.35, 32]} />
+                    <meshBasicMaterial color="#44aaff" transparent opacity={0.8} side={THREE.DoubleSide} />
+                </mesh>
+            )}
+        </group>
+    );
+}
+
+/**
+ * Neutron star mesh with magnetic field and pulsar beams
+ */
+function NeutronStarMesh({ object, isSelected, isHovered, onSelect, onHover }: ObjectMeshProps) {
+    const meshRef = useRef<THREE.Mesh>(null);
+    const shaderRef = useRef<THREE.ShaderMaterial>(null);
+
+    const visualRadius = useMemo(() => {
+        return Math.max(0.6, Math.log10(object.properties.mass + 1) / 40);
+    }, [object.properties.mass]);
+
+    const config = useMemo(() => getNeutronStarConfig(), []);
+
+    const uniforms = useMemo(() => ({
+        uTime: { value: 0 },
+        uSurfaceColor: { value: config.surfaceColor },
+        uHotspotColor: { value: config.hotspotColor },
+        uCrustColor: { value: config.crustColor },
+        uRotationSpeed: { value: config.rotationSpeed },
+        uMagneticAxis: { value: config.magneticAxisAngle },
+        uSurfaceDetail: { value: config.surfaceDetail },
+        uGlowIntensity: { value: config.glowIntensity },
+    }), [config]);
+
+    // Animate shader
+    useFrame((state) => {
+        if (shaderRef.current) {
+            shaderRef.current.uniforms.uTime.value = state.clock.elapsedTime;
+        }
+    });
+
+    const pos = object.state.position;
+
+    return (
+        <group
+            position={[pos.x, pos.y, pos.z]}
+            onClick={onSelect}
+            onPointerOver={() => onHover(true)}
+            onPointerOut={() => onHover(false)}
+        >
+            {/* Neutron star surface with shader */}
+            <mesh ref={meshRef}>
+                <sphereGeometry args={[visualRadius, 64, 64]} />
+                <shaderMaterial
+                    ref={shaderRef}
+                    vertexShader={neutronStarVertexShader}
+                    fragmentShader={neutronStarFragmentShader}
+                    uniforms={uniforms}
+                    toneMapped={false}
+                />
+            </mesh>
+
+            {/* Magnetic field lines */}
+            <MagneticFieldLines
+                rotationSpeed={config.rotationSpeed}
+                magneticAxisAngle={config.magneticAxisAngle}
+                fieldStrength={0.8 * (visualRadius / 0.6)}
+            />
+
+            {/* Pulsar beams */}
+            <PulsarBeams
+                rotationSpeed={config.rotationSpeed}
+                magneticAxisAngle={config.magneticAxisAngle}
+                beamLength={visualRadius * 25}
+                beamWidth={visualRadius * 0.5}
+            />
+
+            {/* Outer glow sphere */}
+            <mesh scale={2.5}>
+                <sphereGeometry args={[visualRadius, 16, 16]} />
                 <meshBasicMaterial
-                    color="#330011"
+                    color={config.surfaceColor}
                     transparent
-                    opacity={0.5}
+                    opacity={0.08}
                     side={THREE.BackSide}
+                    depthWrite={false}
                 />
             </mesh>
 
+            {/* Selection ring */}
+            {isSelected && (
+                <mesh rotation={[Math.PI / 2, 0, 0]}>
+                    <ringGeometry args={[visualRadius * 1.8, visualRadius * 1.85, 32]} />
+                    <meshBasicMaterial color="#44aaff" transparent opacity={0.8} side={THREE.DoubleSide} />
+                </mesh>
+            )}
+        </group>
+    );
+}
+
+/**
+ * Debris/Asteroid mesh (used for collision debris)
+ */
+function DebrisMesh({ object, isSelected, isHovered, onSelect, onHover }: ObjectMeshProps) {
+    const meshRef = useRef<THREE.Mesh>(null);
+    const pos = object.state.position;
+
+    const color = useMemo(() => new THREE.Color(object.visual.color || '#ff8844'), [object.visual.color]);
+
+    return (
+        <group position={[pos.x, pos.y, pos.z]}>
+            <mesh
+                ref={meshRef}
+                onClick={onSelect}
+                onPointerOver={() => onHover(true)}
+                onPointerOut={() => onHover(false)}
+            >
+                <sphereGeometry args={[0.15, 8, 8]} />
+                <meshStandardMaterial
+                    color={color}
+                    emissive={color}
+                    emissiveIntensity={object.visual.emissive || 0.5}
+                    toneMapped={false}
+                />
+            </mesh>
         </group>
     );
 }
@@ -255,14 +471,18 @@ function CosmicObjectRenderer({ object }: { object: CosmicObject }) {
     const isSelected = selectedIds.includes(object.id);
     const isHovered = hoveredId === object.id;
 
-    // Prevent placement triggering when clicking object
     const handleSelect = (e: ThreeEvent<MouseEvent>) => {
-        e.stopPropagation(); // CRITICAL: prevent event from reaching placement plane
+        e.stopPropagation();
         select([object.id]);
     };
     const handleHover = (hovering: boolean) => setHovered(hovering ? object.id : null);
 
     const props = { object, isSelected, isHovered, onSelect: handleSelect, onHover: handleHover };
+
+    // Check if this is debris
+    if (object.metadata?.tags?.includes('debris')) {
+        return <DebrisMesh {...props} />;
+    }
 
     switch (object.type) {
         case CosmicObjectType.STAR:
@@ -272,6 +492,8 @@ function CosmicObjectRenderer({ object }: { object: CosmicObject }) {
             return <PlanetMesh {...props} />;
         case CosmicObjectType.BLACK_HOLE:
             return <BlackHoleMesh {...props} />;
+        case CosmicObjectType.NEUTRON_STAR:
+            return <NeutronStarMesh {...props} />;
         default:
             return <PlanetMesh {...props} />;
     }
@@ -282,8 +504,6 @@ function CosmicObjectRenderer({ object }: { object: CosmicObject }) {
  */
 function GridAndAxesOverlay() {
     const mode = useSimulationStore((s) => s.mode);
-
-    // Hide in observation mode
     if (mode === 'observation') return null;
 
     return (
@@ -299,9 +519,7 @@ function GridAndAxesOverlay() {
 }
 
 /**
- * Placement preview - ghost object with TWO-PHASE PLACEMENT:
- * 1. Click to set position
- * 2. Drag to set velocity (shown as arrow with curved trajectory)
+ * Placement preview - ghost object with TWO-PHASE PLACEMENT
  */
 function PlacementPreview() {
     const isPlacing = usePlacementStore((s) => s.isPlacing);
@@ -328,7 +546,7 @@ function PlacementPreview() {
 
         const handleWheel = (e: WheelEvent) => {
             e.preventDefault();
-            const delta = e.deltaY > 0 ? -0.5 : 0.5; // Scroll down = lower, scroll up = higher
+            const delta = e.deltaY > 0 ? -0.5 : 0.5;
             setYOffset(yOffset + delta);
         };
 
@@ -336,11 +554,9 @@ function PlacementPreview() {
         return () => window.removeEventListener('wheel', handleWheel);
     }, [isPlacing, yOffset, setYOffset]);
 
-    // Track mouse position and update cursor
+    // Track mouse position
     useFrame(() => {
         if (!isPlacing) return;
-
-        // Raycast to an invisible plane at y=0
         raycaster.setFromCamera(pointer, camera);
         const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
         const intersection = new THREE.Vector3();
@@ -351,7 +567,7 @@ function PlacementPreview() {
         }
     });
 
-    // Calculate trajectory points based on initial velocity and nearby gravity
+    // Trajectory prediction
     const trajectoryPoints = useMemo(() => {
         if (phase !== 'velocity' || !fixedPosition) return [];
 
@@ -359,30 +575,24 @@ function PlacementPreview() {
         let pos = new Vector3(fixedPosition.x, fixedPosition.y, fixedPosition.z);
         let vel = new Vector3(velocityVector.x, velocityVector.y, velocityVector.z);
 
-        const dt = 0.05; // Smaller time step for smoother curves
-        const steps = 100; // More points for better curvature visibility
+        const dt = 0.05;
+        const steps = 100;
 
-        // Simple trajectory simulation considering gravity from existing objects
         for (let i = 0; i < steps; i++) {
             points.push(new THREE.Vector3(pos.x, pos.y, pos.z));
 
-            // Calculate gravitational acceleration from all existing objects
             let accX = 0, accY = 0, accZ = 0;
             for (const obj of objects.values()) {
                 const dx = obj.state.position.x - pos.x;
                 const dy = obj.state.position.y - pos.y;
                 const dz = obj.state.position.z - pos.z;
-                const distSq = dx * dx + dy * dy + dz * dz + 1; // +1 softening
+                const distSq = dx * dx + dy * dy + dz * dz + 1;
                 const dist = Math.sqrt(distSq);
 
-                // Match Physics Engine constants:
-                // G_SCENE = 100 for default gravity strength
-                // massRel = mass / 1.989e30 (Solar Mass)
-                const massRel = obj.properties.mass / 1.989e30;
-
-                // a = G * m / r^2
-                // We use 100 as the base scene gravity constant
-                const accMag = (100 * massRel) / Math.max(distSq, 1.0);
+                // Match scene-scale gravity from nbody.ts
+                const mass1 = Math.max(Math.log10(Math.max(obj.properties.mass, 1)), 1);
+                const G = 2.0;
+                const accMag = (G * mass1) / Math.max(distSq, 1.0);
 
                 if (dist > 0.1) {
                     accX += (accMag * dx) / dist;
@@ -391,7 +601,6 @@ function PlacementPreview() {
                 }
             }
 
-            // Update velocity and position using Euler integration
             vel = new Vector3(vel.x + accX * dt, vel.y + accY * dt, vel.z + accZ * dt);
             pos = new Vector3(pos.x + vel.x * dt, pos.y + vel.y * dt, pos.z + vel.z * dt);
         }
@@ -399,15 +608,12 @@ function PlacementPreview() {
         return points;
     }, [phase, fixedPosition, velocityVector, objects]);
 
-    // Handle click based on current phase
     const handleClick = () => {
         if (!isPlacing || !objectType) return;
 
         if (phase === 'positioning') {
-            // Phase 1: Set position, enter velocity phase
             confirmPosition();
         } else if (phase === 'velocity') {
-            // Phase 2: Confirm and create object with velocity
             const placement = confirmPlacement();
             if (placement) {
                 let newObject;
@@ -453,7 +659,6 @@ function PlacementPreview() {
         }
     };
 
-    // Handle right-click to cancel
     const handleContextMenu = (e: ThreeEvent<MouseEvent>) => {
         if (isPlacing) {
             e.stopPropagation();
@@ -463,7 +668,6 @@ function PlacementPreview() {
 
     if (!isPlacing || !objectType) return null;
 
-    // Get preview color based on object type  
     const colorMap: Record<string, string> = {
         [CosmicObjectType.STAR]: '#fff4ea',
         [CosmicObjectType.PLANET]: '#8b7355',
@@ -472,14 +676,13 @@ function PlacementPreview() {
     };
     const previewColor = colorMap[objectType] ?? '#ffffff';
 
-    // Display position: fixed during velocity phase, cursor during positioning
     const displayPosition = phase === 'velocity' && fixedPosition
         ? fixedPosition.toArray()
         : cursorPosition.toArray();
 
     return (
         <>
-            {/* Invisible click plane for placement */}
+            {/* Invisible click plane */}
             <mesh
                 ref={planeRef}
                 position={[0, 0, 0]}
@@ -492,9 +695,8 @@ function PlacementPreview() {
                 <meshBasicMaterial transparent opacity={0} />
             </mesh>
 
-            {/* Ghost preview sphere at display position - Smooth sphere */}
+            {/* Ghost preview */}
             <group position={displayPosition}>
-                {/* Main ghost sphere */}
                 <mesh>
                     <sphereGeometry args={[1, 32, 32]} />
                     <meshStandardMaterial
@@ -507,7 +709,6 @@ function PlacementPreview() {
                         metalness={0.1}
                     />
                 </mesh>
-                {/* Outer glow */}
                 <mesh scale={1.3}>
                     <sphereGeometry args={[1, 16, 16]} />
                     <meshBasicMaterial
@@ -518,7 +719,6 @@ function PlacementPreview() {
                         depthWrite={false}
                     />
                 </mesh>
-                {/* Position indicator ring */}
                 <mesh rotation={[Math.PI / 2, 0, 0]}>
                     <ringGeometry args={[1.5, 1.6, 32]} />
                     <meshBasicMaterial
@@ -530,10 +730,9 @@ function PlacementPreview() {
                 </mesh>
             </group>
 
-            {/* Velocity arrow during velocity phase */}
+            {/* Velocity arrow */}
             {phase === 'velocity' && fixedPosition && velocityVector.length() > 0.01 && (
                 <group position={fixedPosition.toArray()}>
-                    {/* Arrow line */}
                     <line>
                         <bufferGeometry>
                             <bufferAttribute
@@ -549,7 +748,6 @@ function PlacementPreview() {
                         <lineBasicMaterial color="#ffffff" linewidth={3} />
                     </line>
 
-                    {/* Arrowhead */}
                     <mesh
                         position={[
                             velocityVector.x * 5,
@@ -568,7 +766,7 @@ function PlacementPreview() {
                 </group>
             )}
 
-            {/* Trajectory curve during velocity phase */}
+            {/* Trajectory curve */}
             {phase === 'velocity' && trajectoryPoints.length > 1 && (
                 <line>
                     <bufferGeometry>
@@ -603,31 +801,36 @@ function SceneContent() {
             {/* Camera sync */}
             <CameraController />
 
-            {/* Physics simulation loop */}
-            <SimulationLoop />
-
             {/* Placement preview */}
             <PlacementPreview />
 
-            {/* Ambient light */}
-            {/* Realistic Environment Lighting - Component only, no background */}
+            {/* Environment & Lighting */}
             <Environment preset="night" blur={0.5} />
-            <color attach="background" args={['#000000']} />
+            <color attach="background" args={['#000005']} />
+            <ambientLight intensity={0.08} />
+            <pointLight position={[0, 0, 0]} intensity={0.5} />
 
-            <ambientLight intensity={0.1} />
+            {/* Background stars using drei Stars (GPU-efficient points) */}
+            <Stars
+                radius={500}
+                depth={200}
+                count={5000}
+                factor={3}
+                saturation={0.1}
+                fade
+                speed={0.3}
+            />
 
-            {/* Point light at origin (can be moved to sun position) */}
-            <pointLight position={[0, 0, 0]} intensity={1} />
-
-            {/* No background stars - removed particle sphere */}
-
-            {/* Grid and Axes - HIDE in observation mode */}
+            {/* Grid and Axes */}
             <GridAndAxesOverlay />
 
             {/* Render all cosmic objects */}
             {Array.from(objects.values()).map((obj) => (
                 <CosmicObjectRenderer key={obj.id} object={obj} />
             ))}
+
+            {/* Collision particle effects */}
+            <CollisionParticles />
 
             {/* Orbit controls */}
             <OrbitControls
@@ -639,8 +842,9 @@ function SceneContent() {
                 maxDistance={10000}
                 zoomSpeed={1.5}
             />
-            {/* Post-processing effects */}
-            {/* <PostProcessing /> */}
+
+            {/* Post-processing effects (bloom, vignette, SMAA) */}
+            <PostProcessing />
         </>
     );
 }
@@ -654,20 +858,20 @@ export function Scene() {
     return (
         <Canvas
             gl={{
-                antialias: true, // Enable for better quality (SMAA will handle AA)
+                antialias: false, // Handled by SMAA post-processing
                 powerPreference: 'high-performance',
                 alpha: false,
                 stencil: false,
                 depth: true,
-                toneMapping: THREE.ACESFilmicToneMapping, // HDR tone mapping
+                toneMapping: THREE.ACESFilmicToneMapping,
                 toneMappingExposure: 1.0,
                 outputColorSpace: THREE.SRGBColorSpace,
             }}
-            dpr={[1, 1.5]} // Cap DPR for performance
+            dpr={[1, 1.5]}
             style={{ background: '#000' }}
         >
             {/* Adaptive performance */}
-            < AdaptiveDpr pixelated />
+            <AdaptiveDpr pixelated />
             <AdaptiveEvents />
 
             {/* Camera */}
@@ -681,7 +885,7 @@ export function Scene() {
 
             {/* Scene content */}
             <SceneContent />
-        </Canvas >
+        </Canvas>
     );
 }
 

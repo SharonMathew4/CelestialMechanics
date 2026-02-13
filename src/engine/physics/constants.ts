@@ -38,6 +38,55 @@ export const PhysicalConstants = {
 
     /** Proton mass (kg) */
     m_p: 1.67262192369e-27,
+
+    /**
+     * Black Hole & General Relativity Constants
+     */
+
+    /**
+     * Calculate Schwarzschild radius (event horizon) for a given mass
+     * Rs = 2GM/c²
+     * @param mass - Mass in kg
+     * @returns Schwarzschild radius in meters
+     */
+    schwarzschildRadius: (mass: number): number => {
+        return (2 * 6.67430e-11 * mass) / (299792458 ** 2);
+    },
+
+    /**
+     * Photon sphere radius for non-rotating (Schwarzschild) black hole
+     * Rph = 1.5 * Rs
+     * @param mass - Mass in kg
+     * @returns Photon sphere radius in meters
+     */
+    photonSphereRadius: (mass: number): number => {
+        const Rs = (2 * 6.67430e-11 * mass) / (299792458 ** 2);
+        return 1.5 * Rs;
+    },
+
+    /**
+     * Innermost Stable Circular Orbit (ISCO) for Schwarzschild black hole
+     * RISCO = 3 * Rs
+     * @param mass - Mass in kg
+     * @returns ISCO radius in meters
+     */
+    iscoRadius: (mass: number): number => {
+        const Rs = (2 * 6.67430e-11 * mass) / (299792458 ** 2);
+        return 3 * Rs;
+    },
+
+    /**
+     * Gravitational time dilation factor at radius r from black hole
+     * τ = t * sqrt(1 - Rs/r)
+     * @param mass - Mass in kg
+     * @param radius - Distance from center in meters
+     * @returns Time dilation factor (proper time / coordinate time)
+     */
+    timeDilation: (mass: number, radius: number): number => {
+        const Rs = (2 * 6.67430e-11 * mass) / (299792458 ** 2);
+        if (radius <= Rs) return 0; // Inside event horizon
+        return Math.sqrt(1 - Rs / radius);
+    },
 } as const;
 
 /**

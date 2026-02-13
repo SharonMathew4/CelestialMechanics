@@ -18,7 +18,7 @@ import {
     DEFAULT_PHYSICS_CONFIG
 } from '@/engine/physics/nbody';
 import PhysicsWorker from '@/workers/physics.worker?worker';
-import { Vector3 } from '../engine/physics/vector'; // Relative import to avoid alias issues
+import { Vector3 } from '../engine/physics/vector';
 import { RealUniverseData } from '@/data/realUniverse';
 
 /**
@@ -67,7 +67,17 @@ export interface PerformanceMetrics {
     renderTime: number;
     objectCount: number;
     forceCalculations: number;
-    totalEnergy: number; // Added for UI
+    totalEnergy: number;
+}
+
+/**
+ * Collision event for visual effects
+ */
+export interface VisualCollisionEvent {
+    id: string;
+    position: [number, number, number];
+    timestamp: number;
+    energy: number;
 }
 
 /**
@@ -78,7 +88,7 @@ export interface SimulationState {
     mode: AppMode;
     objects: Map<CosmicObjectId, CosmicObject>;
 
-    // Worker reference (instead of local engine)
+    // Worker reference
     worker: Worker | null;
 
     // Time control
@@ -95,6 +105,9 @@ export interface SimulationState {
 
     // Performance
     performance: PerformanceMetrics;
+
+    // Collision events for visual effects
+    collisionEvents: VisualCollisionEvent[];
 
     // Actions
     init: () => void;
@@ -132,11 +145,14 @@ export interface SimulationState {
     updatePhysicsConfig: (updates: Partial<PhysicsConfig>) => void;
     resetPhysicsConfig: () => void;
 
-    // Simulation step (no-op now, handled by worker updates)
+    // Step (sends singleStep to worker)
     step: (dt?: number) => void;
 
     // Performance
     updatePerformance: (metrics: Partial<PerformanceMetrics>) => void;
+
+    // Collision events
+    clearCollisionEvents: () => void;
 }
 
 const DEFAULT_CAMERA: CameraState = {
@@ -157,11 +173,20 @@ const DEFAULT_TIME: TimeState = {
     targetStepsPerSecond: 60,
 };
 
+/**
+ * Reconstruct Vector3 instances from plain data received from worker
+ */
+function reconstructVector3(data: any): Vector3 {
+    if (data instanceof Vector3) return data;
+    return new Vector3(data?.x ?? 0, data?.y ?? 0, data?.z ?? 0);
+}
+
 export const useSimulationStore = create<SimulationState>()((set, get) => ({
     // Initial State
     mode: 'simulation',
     objects: new Map(),
     worker: null,
+    collisionEvents: [],
 
     time: { ...DEFAULT_TIME },
     camera: { ...DEFAULT_CAMERA },
@@ -183,58 +208,116 @@ export const useSimulationStore = create<SimulationState>()((set, get) => ({
         const worker = new PhysicsWorker();
 
         worker.onmessage = (e) => {
-            const { type, ids, buffer, stats } = e.data;
+            const { type, ids, buffer, stats, collisionUpdate, effectiveDt } = e.data;
             if (type === 'physicsUpdate') {
                 set((state) => {
-                    const stride = 10; // Must match worker
+                    const stride = 10;
 
-                    const currentObjects = state.objects;
+                    // Create NEW Map with NEW object references for React reactivity
+                    const newObjects = new Map(state.objects);
                     let hasUpdates = false;
 
                     for (let i = 0; i < ids.length; i++) {
                         const id = ids[i];
-                        const obj = currentObjects.get(id);
-                        if (obj) {
+                        const existingObj = newObjects.get(id);
+                        if (existingObj) {
                             const offset = i * stride;
 
-                            // Use new Vector3 to respect readonly properties
-                            obj.state.position = new Vector3(
-                                buffer[offset + 0],
-                                buffer[offset + 1],
-                                buffer[offset + 2]
-                            );
+                            // Create new object with new state (triggers React re-render)
+                            const updatedObj: CosmicObject = {
+                                ...existingObj,
+                                state: {
+                                    ...existingObj.state,
+                                    position: new Vector3(
+                                        buffer[offset + 0],
+                                        buffer[offset + 1],
+                                        buffer[offset + 2]
+                                    ),
+                                    velocity: new Vector3(
+                                        buffer[offset + 3],
+                                        buffer[offset + 4],
+                                        buffer[offset + 5]
+                                    ),
+                                    orientation: [
+                                        buffer[offset + 6],
+                                        buffer[offset + 7],
+                                        buffer[offset + 8],
+                                        buffer[offset + 9]
+                                    ],
+                                }
+                            };
 
-                            obj.state.velocity = new Vector3(
-                                buffer[offset + 3],
-                                buffer[offset + 4],
-                                buffer[offset + 5]
-                            );
-
-                            // Orientation (array)
-                            obj.state.orientation = [
-                                buffer[offset + 6],
-                                buffer[offset + 7],
-                                buffer[offset + 8],
-                                buffer[offset + 9]
-                            ];
-
+                            newObjects.set(id, updatedObj);
                             hasUpdates = true;
                         }
                     }
 
-                    if (hasUpdates && stats) {
+                    // Handle collision sync: remove destroyed objects, add debris
+                    const newCollisionEvents = [...state.collisionEvents];
+
+                    if (collisionUpdate) {
+                        const { removed, added } = collisionUpdate;
+
+                        // Remove destroyed objects
+                        for (const removedId of removed) {
+                            newObjects.delete(removedId);
+                        }
+
+                        // Add debris objects (reconstruct Vector3 instances)
+                        for (const addedObj of added) {
+                            const obj: CosmicObject = {
+                                ...addedObj,
+                                state: {
+                                    position: reconstructVector3(addedObj.state.position),
+                                    velocity: reconstructVector3(addedObj.state.velocity),
+                                    acceleration: reconstructVector3(addedObj.state.acceleration),
+                                    angularVelocity: reconstructVector3(addedObj.state.angularVelocity),
+                                    orientation: addedObj.state.orientation ?? [0, 0, 0, 1],
+                                }
+                            };
+                            newObjects.set(obj.id, obj);
+                        }
+
+                        // Generate visual collision events for particle effects
+                        // Approximate collision position as midpoint of removed objects
+                        if (removed.length >= 2) {
+                            const pos1 = state.objects.get(removed[0])?.state.position;
+                            const pos2 = state.objects.get(removed[1])?.state.position;
+                            if (pos1 && pos2) {
+                                const midX = (pos1.x + pos2.x) / 2;
+                                const midY = (pos1.y + pos2.y) / 2;
+                                const midZ = (pos1.z + pos2.z) / 2;
+                                newCollisionEvents.push({
+                                    id: crypto.randomUUID(),
+                                    position: [midX, midY, midZ],
+                                    timestamp: Date.now(),
+                                    energy: 1.0,
+                                });
+                            }
+                        }
+
+                        hasUpdates = true;
+                    }
+
+                    // Clean up old collision events (> 5 seconds old)
+                    const now = Date.now();
+                    const filteredEvents = newCollisionEvents.filter(e => now - e.timestamp < 5000);
+
+                    if (hasUpdates) {
                         return {
-                            performance: {
+                            objects: newObjects,
+                            collisionEvents: filteredEvents,
+                            performance: stats ? {
                                 ...state.performance,
                                 forceCalculations: stats.forceCalculations,
                                 physicsTime: stats.lastUpdateTime,
                                 totalEnergy: stats.totalEnergy,
-                                fps: 1000 / (stats.lastUpdateTime || 16),
-                            },
+                                objectCount: newObjects.size,
+                            } : state.performance,
                             time: {
                                 ...state.time,
-                                simulationTime: state.time.simulationTime + (state.physicsConfig.dt * state.time.timeScale)
-                            }
+                                simulationTime: state.time.simulationTime + (effectiveDt || 0),
+                            },
                         };
                     }
                     return {};
@@ -324,15 +407,15 @@ export const useSimulationStore = create<SimulationState>()((set, get) => ({
         const { worker } = get();
         worker?.terminate();
 
-        // Clear state and worker reference
         set({
             objects: new Map(),
             selection: { selectedIds: [], hoveredId: null },
             performance: { ...get().performance, objectCount: 0 },
-            worker: null
+            worker: null,
+            collisionEvents: [],
         });
 
-        // Re-initialize worker (creates new worker and binds listeners)
+        // Re-initialize worker
         get().init();
     },
 
@@ -359,10 +442,11 @@ export const useSimulationStore = create<SimulationState>()((set, get) => ({
         });
     },
 
+    // FIXED: setTimeScale no longer modifies dt. Sends timeScale to worker separately.
     setTimeScale: (scale) => {
         const newScale = Math.max(0.001, Math.min(1e6, scale));
         set((state) => {
-            state.worker?.postMessage({ type: 'updateConfig', payload: { dt: state.physicsConfig.dt * newScale } });
+            state.worker?.postMessage({ type: 'setTimeScale', payload: newScale });
             return { time: { ...state.time, timeScale: newScale } };
         });
     },
@@ -413,13 +497,17 @@ export const useSimulationStore = create<SimulationState>()((set, get) => ({
         });
     },
 
+    // FIXED: step now sends singleStep to worker instead of being a no-op
     step: (_dt) => {
-        // NO-OP: Physics handled by worker
+        const { worker } = get();
+        worker?.postMessage({ type: 'singleStep' });
     },
 
     updatePerformance: (metrics) => set((state) => ({
         performance: { ...state.performance, ...metrics }
     })),
+
+    clearCollisionEvents: () => set({ collisionEvents: [] }),
 }));
 
 // Export selectors
@@ -429,5 +517,6 @@ export const useCameraState = () => useSimulationStore((s) => s.camera);
 export const useSelectionState = () => useSimulationStore((s) => s.selection);
 export const usePerformance = () => useSimulationStore((s) => s.performance);
 export const useAppMode = () => useSimulationStore((s) => s.mode);
+export const useCollisionEvents = () => useSimulationStore((s) => s.collisionEvents);
 
 export default useSimulationStore;

@@ -2,11 +2,11 @@
  * Cosmic Fabric - N-body Physics Engine
  * 
  * COMPLETE IMPLEMENTATION with:
- * - Gravitational force calculation (O(n²) for correctness)
+ * - Proper scene-scale gravitational force calculation (O(n²))
+ * - Adaptive softening based on visual radii
  * - Collision detection (bounding sphere)
- * - Collision response (inelastic merge)
- * - Velocity Verlet integration
- * - Debug logging
+ * - Collision response (debris splatter with particle events)
+ * - Velocity Verlet integration (energy-conserving, no damping)
  */
 
 import { Vector3 } from './vector';
@@ -32,11 +32,8 @@ export interface PhysicsConfig {
     /** Maximum force magnitude to prevent instability */
     maxForce: number;
 
-    /** Maximum velocity (m/s) */
+    /** Maximum velocity (scene units/s) */
     maxVelocity: number;
-
-    /** Velocity damping factor (0-1, 1 = no damping) */
-    velocityDamping: number;
 
     /** Enable collision detection and response */
     enableCollisions: boolean;
@@ -49,19 +46,18 @@ export interface PhysicsConfig {
  * Default physics configuration
  */
 export const DEFAULT_PHYSICS_CONFIG: PhysicsConfig = {
-    gravityStrength: 50, // 0-100 scale, 50 = normal
-    gravityRange: 5,     // 0-10 scale
-    dt: 0.016,          // ~60fps frame time for scene-scale physics
-    softening: 1e9,      // 1 billion meters
-    maxForce: 1e25,      // Maximum force magnitude
-    maxVelocity: 1e7,    // ~3% speed of light
-    velocityDamping: 0.999, // Very subtle damping
+    gravityStrength: 50,    // 0-100 scale, 50 = normal
+    gravityRange: 5,        // 0-10 scale
+    dt: 1 / 60,            // ~60fps frame time
+    softening: 0.5,         // Scene-scale softening (will be combined with visual radii)
+    maxForce: 1e6,          // High but finite limit
+    maxVelocity: 200,       // Scene units per second
     enableCollisions: true,
     enableDebugLogging: false,
 };
 
 /**
- * Collision event for logging
+ * Collision event for syncing to main thread
  */
 export interface CollisionEvent {
     timestamp: number;
@@ -71,9 +67,18 @@ export interface CollisionEvent {
     object2Name: string;
     type: 'merge' | 'absorption';
     resultId: CosmicObjectId;
+    position: { x: number; y: number; z: number };
+    energy: number; // Relative collision energy for particle intensity
 }
 
-
+/**
+ * Convert real mass (kg) to scene-scale mass
+ * Uses log-scale to keep mass ratios meaningful while keeping numbers workable
+ * Sun (~2e30 kg) → ~30, Earth (~6e24 kg) → ~24.8, Asteroid (~1e15 kg) → ~15
+ */
+function toSceneMass(realMass: number): number {
+    return Math.max(Math.log10(Math.max(realMass, 1)), 1);
+}
 
 /**
  * Main N-body physics engine with collision detection
@@ -119,7 +124,7 @@ export class NBodyEngine {
         this.stats.objectCount = this.objects.size;
 
         if (this.config.enableDebugLogging) {
-            console.log(`[Physics] Added object: ${object.metadata.name} (${object.id})`);
+            console.log(`[Physics] Added object: ${object.metadata.name} (${object.id}), mass=${object.properties.mass}`);
         }
     }
 
@@ -146,9 +151,6 @@ export class NBodyEngine {
         return Array.from(this.objects.values());
     }
 
-    /**
-     * Get simulation statistics
-     */
     /**
      * Get physics state as binary buffer for worker transfer
      */
@@ -187,11 +189,6 @@ export class NBodyEngine {
      * Get simulation statistics
      */
     getStats() {
-        // Calculate energy for UI
-        // Note: This is expensive (O(N^2) for potential), so we might want to throttle it
-        // For now, we'll do it if object count is low, or estimate it
-        // Or just leave it 0 if too expensive. 
-        // Let's implement a simple Kinetic Energy calc (O(N))
         let ke = 0;
         for (const obj of this.objects.values()) {
             if (!obj.isPhysicsEnabled) continue;
@@ -201,7 +198,7 @@ export class NBodyEngine {
 
         return {
             ...this.stats,
-            totalEnergy: ke // approximated as KE for now to assume conservation trend
+            totalEnergy: ke,
         };
     }
 
@@ -220,8 +217,33 @@ export class NBodyEngine {
     }
 
     /**
+     * Calculate visual collision radius for an object
+     * Used for both collision detection and softening
+     */
+    getVisualRadius(obj: CosmicObject): number {
+        switch (obj.type) {
+            case CosmicObjectType.STAR: {
+                const lumFactor = Math.log10((obj.properties.luminosity || 1e26) + 1) / 10;
+                return 0.5 + lumFactor;
+            }
+            case CosmicObjectType.BLACK_HOLE:
+                return Math.max(0.8, Math.log10(obj.properties.mass + 1) / 30);
+            case CosmicObjectType.PLANET:
+            case CosmicObjectType.MOON: {
+                const baseRadius = 0.2;
+                const radiusFactor = Math.log10(obj.properties.radius / 6.371e6 + 1);
+                return baseRadius + radiusFactor * 0.1;
+            }
+            case CosmicObjectType.NEUTRON_STAR:
+                return 0.4;
+            default:
+                return 0.3;
+        }
+    }
+
+    /**
      * Calculate gravitational force between two objects
-     * Uses SCENE-SCALE physics (not real SI units) for visible orbital motion
+     * Uses scene-scale masses (log10 of real mass) for balanced interactions
      * Returns force ON obj1 FROM obj2
      */
     private calculateGravitationalForce(obj1: CosmicObject, obj2: CosmicObject): Vector3 {
@@ -233,28 +255,28 @@ export class NBodyEngine {
         const distSq = dx * dx + dy * dy + dz * dz;
         const dist = Math.sqrt(distSq);
 
-        // Minimum distance to prevent singularity
-        const minDist = 1.0;
-        const effectiveDistSq = Math.max(distSq, minDist * minDist);
+        // Adaptive softening based on visual radii to prevent singularities
+        const r1 = this.getVisualRadius(obj1);
+        const r2 = this.getVisualRadius(obj2);
+        const softeningLen = this.config.softening + 0.3 * (r1 + r2);
+        const effectiveDistSq = distSq + softeningLen * softeningLen;
 
-        // SCENE-SCALE GRAVITY: Use relative mass ratios
-        // Convert real masses (kg) to relative scale
-        const SOLAR_MASS = 1.989e30;
-        const mass1Rel = obj1.properties.mass / SOLAR_MASS; // In solar masses
-        const mass2Rel = obj2.properties.mass / SOLAR_MASS;
+        // Scene-scale gravity:
+        // mass1, mass2 are log10(real_mass) giving values ~15-30
+        // G_scene is tuned so two stars at distance 10 produce visible acceleration
+        const mass1 = toSceneMass(obj1.properties.mass);
+        const mass2 = toSceneMass(obj2.properties.mass);
 
-        // Scene-scale gravitational constant (tuned for visible orbits)
-        // F = G_scene * m1 * m2 / r²
-        // With G_scene = 50, two 1-solar-mass objects at distance 10 feel force F = 50 * 1 * 1 / 100 = 0.5
-        const G_SCENE = 100 * (this.config.gravityStrength / 50); // Scale by slider (50 = normal)
+        // gravityStrength: 0-100 slider, 50 = normal
+        const G_SCENE = 2.0 * (this.config.gravityStrength / 50);
 
-        let forceMag = (G_SCENE * mass1Rel * mass2Rel) / effectiveDistSq;
+        let forceMag = (G_SCENE * mass1 * mass2) / effectiveDistSq;
 
-        // Clamp force magnitude to prevent instability
-        forceMag = Math.min(forceMag, 10000);
+        // Safety clamp (very high, just prevents numerical explosions)
+        forceMag = Math.min(forceMag, this.config.maxForce);
 
-        // Calculate force direction (normalized)
-        if (dist < 0.01) return Vector3.zero();
+        // Calculate force direction
+        if (dist < 1e-8) return Vector3.zero();
 
         const fx = (forceMag * dx) / dist;
         const fy = (forceMag * dy) / dist;
@@ -262,47 +284,19 @@ export class NBodyEngine {
 
         this.stats.forceCalculations++;
 
-        if (this.config.enableDebugLogging) {
-            console.log(`[Gravity] ${obj1.metadata.name} <- ${obj2.metadata.name}: dist=${dist.toFixed(2)}, force=${forceMag.toFixed(4)}`);
-        }
-
         return new Vector3(fx, fy, fz);
     }
 
     /**
-     * Calculate visual collision radius for an object
-     * This converts physical radius to scene-unit scale for collision detection
-     */
-    private getVisualCollisionRadius(obj: CosmicObject): number {
-        // Visual radius calculation matches Scene.tsx rendering
-        // Base: ~0.5-2 scene units depending on object type and luminosity
-        switch (obj.type) {
-            case CosmicObjectType.STAR:
-                const lumFactor = Math.log10((obj.properties.luminosity || 1e26) + 1) / 10;
-                return 0.5 + lumFactor;
-            case CosmicObjectType.BLACK_HOLE:
-                return Math.log10(obj.properties.mass + 1) / 30;
-            case CosmicObjectType.PLANET:
-            case CosmicObjectType.MOON:
-                return 0.3;
-            default:
-                return 0.5;
-        }
-    }
-
-    /**
-     * Check for collision between two objects (bounding sphere with visual radii)
+     * Check for collision between two objects (bounding sphere)
      */
     private checkCollision(obj1: CosmicObject, obj2: CosmicObject): boolean {
         const dist = obj1.state.position.distanceTo(obj2.state.position);
-        // Use VISUAL radii for collision, not physical radii (which are in meters)
-        const radius1 = this.getVisualCollisionRadius(obj1);
-        const radius2 = this.getVisualCollisionRadius(obj2);
+        const radius1 = this.getVisualRadius(obj1);
+        const radius2 = this.getVisualRadius(obj2);
         const combinedRadius = radius1 + radius2;
         return dist <= combinedRadius;
     }
-
-
 
     /**
      * Detect and handle all collisions with Debris Splatter
@@ -324,37 +318,56 @@ export class NBodyEngine {
                 if (this.objectsToRemove.has(obj1.id) || this.objectsToRemove.has(obj2.id)) continue;
 
                 if (this.checkCollision(obj1, obj2)) {
-                    // Collision Detected: SPLATTER!
+                    // Collision Detected
                     this.objectsToRemove.add(obj1.id);
                     this.objectsToRemove.add(obj2.id);
+                    this.stats.collisions++;
 
                     // Debris Limit
                     if (this.objects.size > 300) continue;
 
                     // 1. Calculate properties of collision
                     const totalMass = obj1.properties.mass + obj2.properties.mass;
-                    const centerPos = obj1.state.position.scale(obj1.properties.mass)
-                        .add(obj2.state.position.scale(obj2.properties.mass))
+                    const mass1 = obj1.properties.mass;
+                    const mass2 = obj2.properties.mass;
+
+                    const centerPos = obj1.state.position.scale(mass1)
+                        .add(obj2.state.position.scale(mass2))
                         .scale(1 / totalMass);
 
-                    const centerVel = obj1.state.velocity.scale(obj1.properties.mass)
-                        .add(obj2.state.velocity.scale(obj2.properties.mass))
+                    const centerVel = obj1.state.velocity.scale(mass1)
+                        .add(obj2.state.velocity.scale(mass2))
                         .scale(1 / totalMass);
 
-                    // 2. Determine number of debris pieces (mass dependent)
-                    // Max 8 pieces to prevent lag
-                    const debrisCount = Math.min(Math.floor(Math.sqrt(totalMass / 1e23)) + 3, 8);
+                    // Relative velocity for collision energy
+                    const relVel = obj1.state.velocity.subtract(obj2.state.velocity).magnitude();
+
+                    // Record collision event
+                    this.collisionEvents.push({
+                        timestamp: Date.now(),
+                        object1Id: obj1.id,
+                        object2Id: obj2.id,
+                        object1Name: obj1.metadata.name,
+                        object2Name: obj2.metadata.name,
+                        type: 'merge',
+                        resultId: '',
+                        position: { x: centerPos.x, y: centerPos.y, z: centerPos.z },
+                        energy: 0.5 * (mass1 * mass2 / totalMass) * relVel * relVel,
+                    });
+
+                    // 2. Determine number of debris pieces
+                    const debrisCount = Math.min(Math.floor(Math.sqrt(toSceneMass(totalMass))) + 3, 8);
+                    const r1 = this.getVisualRadius(obj1);
+                    const r2 = this.getVisualRadius(obj2);
 
                     for (let k = 0; k < debrisCount; k++) {
                         const debrisMass = totalMass / debrisCount;
-                        // Radius for Game Scale (Visual)
-                        // Ignore density, just make it visible in scene units (0.3 - 0.7)
-                        const debrisRadius = 0.3 + Math.random() * 0.4;
+                        const debrisRadius = 0.15 + Math.random() * 0.25;
 
-                        // Random explosive direction
+                        // Random explosive direction (uniform sphere)
                         const theta = Math.random() * Math.PI * 2;
                         const phi = Math.acos(2 * Math.random() - 1);
-                        const speed = Math.random() * 5.0 + 2.0; // Explosive kick
+                        const speed = Math.random() * 5.0 + 2.0;
 
                         const dir = new Vector3(
                             Math.sin(phi) * Math.cos(theta),
@@ -362,11 +375,14 @@ export class NBodyEngine {
                             Math.cos(phi)
                         );
 
+                        // Spawn using VISUAL radius, not physical radius (meters)
+                        const spawnOffset = (r1 + r2) * 0.5;
+
                         const debris: CosmicObject = {
                             id: crypto.randomUUID(),
                             type: CosmicObjectType.ASTEROID,
                             state: {
-                                position: centerPos.add(dir.scale(obj1.properties.radius * 0.5)),
+                                position: centerPos.add(dir.scale(spawnOffset)),
                                 velocity: centerVel.add(dir.scale(speed)),
                                 acceleration: Vector3.zero(),
                                 angularVelocity: Vector3.zero(),
@@ -376,13 +392,16 @@ export class NBodyEngine {
                                 mass: debrisMass,
                                 radius: debrisRadius,
                                 density: 5000,
-                                temperature: Math.max(obj1.properties.temperature, obj2.properties.temperature) + 500, // Heat up
+                                temperature: Math.max(
+                                    obj1.properties.temperature,
+                                    obj2.properties.temperature
+                                ) + 500,
                                 luminosity: 0,
                                 charge: 0,
                                 magneticField: 0
                             },
                             visual: {
-                                color: '#ff8844', // Hot debris
+                                color: '#ff8844',
                                 emissive: 1.0,
                                 opacity: 1
                             },
@@ -418,11 +437,17 @@ export class NBodyEngine {
 
     /**
      * Update simulation by one time step
-     * Uses Velocity Verlet integration for stability
+     * Uses Velocity Verlet integration for stability (energy-conserving)
      */
     step(dt?: number): void {
         const startTime = performance.now();
         const timeStep = dt ?? this.config.dt;
+
+        // Skip extremely tiny or zero timesteps
+        if (timeStep < 1e-10) {
+            this.stats.lastUpdateTime = 0;
+            return;
+        }
 
         this.stats.forceCalculations = 0;
 
@@ -434,28 +459,22 @@ export class NBodyEngine {
             return;
         }
 
-        // STEP 1: Calculate all forces and accelerations
+        // STEP 1: Calculate all forces and accelerations at current positions
         const accelerations = new Map<CosmicObjectId, Vector3>();
-        const SOLAR_MASS = 1.989e30;
 
         for (const obj of physicsObjects) {
             let totalForce = Vector3.zero();
 
-            // Sum gravitational forces from all other objects
             for (const other of physicsObjects) {
                 if (obj.id === other.id) continue;
                 const force = this.calculateGravitationalForce(obj, other);
                 totalForce = totalForce.add(force);
             }
 
-            // a = F / m (using relative mass for consistent scene-scale)
-            const massRel = obj.properties.mass / SOLAR_MASS;
-            const acceleration = totalForce.scale(1 / Math.max(massRel, 0.001));
+            // a = F / m (using scene-scale mass for consistency)
+            const sceneMass = toSceneMass(obj.properties.mass);
+            const acceleration = totalForce.scale(1 / Math.max(sceneMass, 0.1));
             accelerations.set(obj.id, acceleration);
-
-            if (this.config.enableDebugLogging && totalForce.magnitude() > 0) {
-                console.log(`[Physics] ${obj.metadata.name}: Force=${totalForce.magnitude().toFixed(4)}, Accel=${acceleration.magnitude().toFixed(4)}`);
-            }
         }
 
         // STEP 2: Velocity Verlet - Update positions
@@ -484,13 +503,12 @@ export class NBodyEngine {
                 totalForce = totalForce.add(force);
             }
 
-            // Use relative mass for consistent scene-scale
-            const massRel = obj.properties.mass / SOLAR_MASS;
-            const acceleration = totalForce.scale(1 / Math.max(massRel, 0.001));
+            const sceneMass = toSceneMass(obj.properties.mass);
+            const acceleration = totalForce.scale(1 / Math.max(sceneMass, 0.1));
             newAccelerations.set(obj.id, acceleration);
         }
 
-        // STEP 4: Velocity Verlet - Update velocities
+        // STEP 4: Velocity Verlet - Update velocities (NO DAMPING — energy conservation)
         // v(t+dt) = v(t) + 0.5*(a(t) + a(t+dt))*dt
         for (const obj of physicsObjects) {
             const state = obj.state;
@@ -504,16 +522,13 @@ export class NBodyEngine {
                 state.velocity.z + (oldAcc.z + newAcc.z) * halfDt
             );
 
-            // Apply velocity damping
-            state.velocity = state.velocity.scale(this.config.velocityDamping);
-
-            // Clamp velocity
+            // Clamp velocity (safety, not damping)
             const velMag = state.velocity.magnitude();
             if (velMag > this.config.maxVelocity) {
                 state.velocity = state.velocity.scale(this.config.maxVelocity / velMag);
             }
 
-            // Store acceleration for next frame
+            // Store acceleration for reference
             state.acceleration = newAcc;
         }
 

@@ -10,12 +10,14 @@ export {
     useSelectionState,
     usePerformance,
     useAppMode,
+    useCollisionEvents,
     type SimulationState,
     type TimeState,
     type CameraState,
     type SelectionState,
     type PerformanceMetrics,
     type AppMode,
+    type VisualCollisionEvent,
 } from './simulationStore';
 
 export {

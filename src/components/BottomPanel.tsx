@@ -129,7 +129,7 @@ function StepButton() {
     const physicsConfig = useSimulationStore((s) => s.physicsConfig);
 
     const handleStep = () => {
-        step(physicsConfig.dt);
+        step();
     };
 
     return (
