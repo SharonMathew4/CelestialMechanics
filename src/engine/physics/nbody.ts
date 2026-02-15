@@ -10,8 +10,9 @@
  */
 
 import { Vector3 } from './vector';
-import { CosmicObject, CosmicObjectId, CosmicObjectType } from './types';
-import { PhysicalConstants } from './constants';
+import { CosmicObject, CosmicObjectId, CosmicObjectType, CollisionType, Planet, Nebula } from './types';
+import { PhysicalConstants, AstronomicalUnits } from './constants';
+import { createBlackHole, createNebula, createStar, generateId, createDefaultState, createDefaultMetadata } from './objectFactory';
 
 /**
  * Physics configuration
@@ -49,7 +50,7 @@ export const DEFAULT_PHYSICS_CONFIG: PhysicsConfig = {
     gravityStrength: 50,    // 0-100 scale, 50 = normal
     gravityRange: 5,        // 0-10 scale
     dt: 1 / 60,            // ~60fps frame time
-    softening: 0.5,         // Scene-scale softening (will be combined with visual radii)
+    softening: 0.3,         // Scene-scale softening (will be combined with visual radii)
     maxForce: 1e6,          // High but finite limit
     maxVelocity: 200,       // Scene units per second
     enableCollisions: true,
@@ -66,6 +67,7 @@ export interface CollisionEvent {
     object1Name: string;
     object2Name: string;
     type: 'merge' | 'absorption';
+    collisionType: CollisionType;
     resultId: CosmicObjectId;
     position: { x: number; y: number; z: number };
     energy: number; // Relative collision energy for particle intensity
@@ -88,6 +90,15 @@ export class NBodyEngine {
     private objects: Map<CosmicObjectId, CosmicObject>;
     private collisionEvents: CollisionEvent[] = [];
     private objectsToRemove: Set<CosmicObjectId> = new Set();
+
+    // Kilonova collapse tracking: center position + timestamp
+    private kilonovaCollapses: Array<{
+        centerPos: Vector3;
+        centerVel: Vector3;
+        combinedMass: number;
+        timestamp: number;
+        debrisIds: string[];
+    }> = [];
 
     // Statistics
     private stats = {
@@ -268,9 +279,18 @@ export class NBodyEngine {
         const mass2 = toSceneMass(obj2.properties.mass);
 
         // gravityStrength: 0-100 slider, 50 = normal
-        const G_SCENE = 2.0 * (this.config.gravityStrength / 50);
+        const G_SCENE = 20.0 * (this.config.gravityStrength / 50);
 
         let forceMag = (G_SCENE * mass1 * mass2) / effectiveDistSq;
+
+        // Smooth distance falloff using gravityRange config
+        // gravityRange: 0-10 scale, determines effective range of gravity
+        // Objects beyond maxRange experience exponentially decaying force
+        const maxRange = this.config.gravityRange * 100; // e.g., 5 * 100 = 500 units
+        if (dist > maxRange * 0.5) {
+            const falloff = Math.exp(-2.0 * (dist - maxRange * 0.5) / maxRange);
+            forceMag *= falloff;
+        }
 
         // Safety clamp (very high, just prevents numerical explosions)
         forceMag = Math.min(forceMag, this.config.maxForce);
@@ -299,7 +319,61 @@ export class NBodyEngine {
     }
 
     /**
-     * Detect and handle all collisions with Debris Splatter
+     * Classify the collision type based on the two colliding objects
+     */
+    private classifyCollision(obj1: CosmicObject, obj2: CosmicObject): CollisionType {
+        const t1 = obj1.type;
+        const t2 = obj2.type;
+
+        // Black hole collisions take highest priority
+        if (t1 === CosmicObjectType.BLACK_HOLE && t2 === CosmicObjectType.BLACK_HOLE) {
+            return 'blackhole_merger';
+        }
+        if (t1 === CosmicObjectType.BLACK_HOLE || t2 === CosmicObjectType.BLACK_HOLE) {
+            return 'tidal_disruption';
+        }
+
+        // Neutron star mergers
+        if (t1 === CosmicObjectType.NEUTRON_STAR && t2 === CosmicObjectType.NEUTRON_STAR) {
+            return 'kilonova';
+        }
+
+        // Stellar collisions (star+star or star+neutron star)
+        if (t1 === CosmicObjectType.STAR && t2 === CosmicObjectType.STAR) {
+            return 'stellar_collision';
+        }
+        if ((t1 === CosmicObjectType.STAR && t2 === CosmicObjectType.NEUTRON_STAR) ||
+            (t1 === CosmicObjectType.NEUTRON_STAR && t2 === CosmicObjectType.STAR)) {
+            return 'stellar_collision';
+        }
+
+        // Gas giant collisions
+        const isGasGiant1 = t1 === CosmicObjectType.PLANET && (obj1 as Planet).isRocky === false;
+        const isGasGiant2 = t2 === CosmicObjectType.PLANET && (obj2 as Planet).isRocky === false;
+        if (isGasGiant1 && isGasGiant2) {
+            return 'gas_collision';
+        }
+        // One gas giant + smaller object
+        if (isGasGiant1 || isGasGiant2) {
+            return 'gas_collision';
+        }
+
+        // Star absorbing smaller objects
+        if (t1 === CosmicObjectType.STAR || t2 === CosmicObjectType.STAR) {
+            return 'stellar_collision';
+        }
+
+        // Neutron star absorbing smaller objects
+        if (t1 === CosmicObjectType.NEUTRON_STAR || t2 === CosmicObjectType.NEUTRON_STAR) {
+            return 'tidal_disruption';
+        }
+
+        // Default: rocky collision
+        return 'rocky_collision';
+    }
+
+    /**
+     * Detect and handle all collisions with type-based physics
      */
     private processCollisions(): void {
         if (!this.config.enableCollisions) return;
@@ -318,104 +392,37 @@ export class NBodyEngine {
                 if (this.objectsToRemove.has(obj1.id) || this.objectsToRemove.has(obj2.id)) continue;
 
                 if (this.checkCollision(obj1, obj2)) {
-                    // Collision Detected
-                    this.objectsToRemove.add(obj1.id);
-                    this.objectsToRemove.add(obj2.id);
                     this.stats.collisions++;
 
-                    // Debris Limit
-                    if (this.objects.size > 300) continue;
+                    // Debris limit
+                    if (this.objects.size > 300) {
+                        // Just merge without debris
+                        this.objectsToRemove.add(obj1.id);
+                        this.objectsToRemove.add(obj2.id);
+                        continue;
+                    }
 
-                    // 1. Calculate properties of collision
-                    const totalMass = obj1.properties.mass + obj2.properties.mass;
-                    const mass1 = obj1.properties.mass;
-                    const mass2 = obj2.properties.mass;
+                    const collisionType = this.classifyCollision(obj1, obj2);
 
-                    const centerPos = obj1.state.position.scale(mass1)
-                        .add(obj2.state.position.scale(mass2))
-                        .scale(1 / totalMass);
-
-                    const centerVel = obj1.state.velocity.scale(mass1)
-                        .add(obj2.state.velocity.scale(mass2))
-                        .scale(1 / totalMass);
-
-                    // Relative velocity for collision energy
-                    const relVel = obj1.state.velocity.subtract(obj2.state.velocity).magnitude();
-
-                    // Record collision event
-                    this.collisionEvents.push({
-                        timestamp: Date.now(),
-                        object1Id: obj1.id,
-                        object2Id: obj2.id,
-                        object1Name: obj1.metadata.name,
-                        object2Name: obj2.metadata.name,
-                        type: 'merge',
-                        resultId: '',
-                        position: { x: centerPos.x, y: centerPos.y, z: centerPos.z },
-                        energy: 0.5 * (mass1 * mass2 / totalMass) * relVel * relVel,
-                    });
-
-                    // 2. Determine number of debris pieces
-                    const debrisCount = Math.min(Math.floor(Math.sqrt(toSceneMass(totalMass))) + 3, 8);
-                    const r1 = this.getVisualRadius(obj1);
-                    const r2 = this.getVisualRadius(obj2);
-
-                    for (let k = 0; k < debrisCount; k++) {
-                        const debrisMass = totalMass / debrisCount;
-                        const debrisRadius = 0.15 + Math.random() * 0.25;
-
-                        // Random explosive direction (uniform sphere)
-                        const theta = Math.random() * Math.PI * 2;
-                        const phi = Math.acos(2 * Math.random() - 1);
-                        const speed = Math.random() * 5.0 + 2.0;
-
-                        const dir = new Vector3(
-                            Math.sin(phi) * Math.cos(theta),
-                            Math.sin(phi) * Math.sin(theta),
-                            Math.cos(phi)
-                        );
-
-                        // Spawn using VISUAL radius, not physical radius (meters)
-                        const spawnOffset = (r1 + r2) * 0.5;
-
-                        const debris: CosmicObject = {
-                            id: crypto.randomUUID(),
-                            type: CosmicObjectType.ASTEROID,
-                            state: {
-                                position: centerPos.add(dir.scale(spawnOffset)),
-                                velocity: centerVel.add(dir.scale(speed)),
-                                acceleration: Vector3.zero(),
-                                angularVelocity: Vector3.zero(),
-                                orientation: [0, 0, 0, 1]
-                            },
-                            properties: {
-                                mass: debrisMass,
-                                radius: debrisRadius,
-                                density: 5000,
-                                temperature: Math.max(
-                                    obj1.properties.temperature,
-                                    obj2.properties.temperature
-                                ) + 500,
-                                luminosity: 0,
-                                charge: 0,
-                                magneticField: 0
-                            },
-                            visual: {
-                                color: '#ff8844',
-                                emissive: 1.0,
-                                opacity: 1
-                            },
-                            isPhysicsEnabled: true,
-                            lodLevel: 0,
-                            metadata: {
-                                name: 'Debris',
-                                createdAt: Date.now(),
-                                modifiedAt: Date.now(),
-                                isRealObject: false,
-                                tags: ['debris']
-                            }
-                        };
-                        debrisToAdd.push(debris);
+                    switch (collisionType) {
+                        case 'rocky_collision':
+                            this.handleRockyCollision(obj1, obj2, debrisToAdd);
+                            break;
+                        case 'gas_collision':
+                            this.handleGasCollision(obj1, obj2, debrisToAdd);
+                            break;
+                        case 'stellar_collision':
+                            this.handleStellarCollision(obj1, obj2, debrisToAdd);
+                            break;
+                        case 'kilonova':
+                            this.handleKilonovaCollision(obj1, obj2, debrisToAdd);
+                            break;
+                        case 'blackhole_merger':
+                            this.handleBlackHoleMerger(obj1, obj2, debrisToAdd);
+                            break;
+                        case 'tidal_disruption':
+                            this.handleTidalDisruption(obj1, obj2, debrisToAdd);
+                            break;
                     }
                 }
             }
@@ -433,6 +440,630 @@ export class NBodyEngine {
         }
 
         this.stats.objectCount = this.objects.size;
+    }
+
+    /**
+     * Helper: compute collision center and velocity
+     */
+    private getCollisionCenter(obj1: CosmicObject, obj2: CosmicObject) {
+        const totalMass = obj1.properties.mass + obj2.properties.mass;
+        const m1 = obj1.properties.mass;
+        const m2 = obj2.properties.mass;
+
+        const centerPos = obj1.state.position.scale(m1)
+            .add(obj2.state.position.scale(m2))
+            .scale(1 / totalMass);
+
+        const centerVel = obj1.state.velocity.scale(m1)
+            .add(obj2.state.velocity.scale(m2))
+            .scale(1 / totalMass);
+
+        const relVel = obj1.state.velocity.subtract(obj2.state.velocity).magnitude();
+        const energy = 0.5 * (m1 * m2 / totalMass) * relVel * relVel;
+
+        return { centerPos, centerVel, totalMass, m1, m2, relVel, energy };
+    }
+
+    /**
+     * Helper: generate random spherical direction
+     */
+    private randomSphereDir(): Vector3 {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        return new Vector3(
+            Math.sin(phi) * Math.cos(theta),
+            Math.sin(phi) * Math.sin(theta),
+            Math.cos(phi)
+        );
+    }
+
+    /**
+     * Helper: record a collision event
+     */
+    private recordCollisionEvent(
+        obj1: CosmicObject, obj2: CosmicObject,
+        collisionType: CollisionType, type: 'merge' | 'absorption',
+        centerPos: Vector3, energy: number, resultId: string = ''
+    ) {
+        this.collisionEvents.push({
+            timestamp: Date.now(),
+            object1Id: obj1.id,
+            object2Id: obj2.id,
+            object1Name: obj1.metadata.name,
+            object2Name: obj2.metadata.name,
+            type,
+            collisionType,
+            resultId,
+            position: { x: centerPos.x, y: centerPos.y, z: centerPos.z },
+            energy,
+        });
+    }
+
+    // ─── Category 1: Rocky/Normal Collisions ────────────────────────────
+    private handleRockyCollision(obj1: CosmicObject, obj2: CosmicObject, debrisToAdd: CosmicObject[]): void {
+        const { centerPos, centerVel, totalMass, m1, m2, energy } = this.getCollisionCenter(obj1, obj2);
+        const r1 = this.getVisualRadius(obj1);
+        const r2 = this.getVisualRadius(obj2);
+        const massRatio = Math.max(m1, m2) / Math.min(m1, m2);
+
+        if (massRatio >= 3) {
+            // Asymmetric: smaller splatters, larger absorbs
+            const [larger, smaller] = m1 > m2 ? [obj1, obj2] : [obj2, obj1];
+            this.objectsToRemove.add(smaller.id);
+
+            // Increase larger object's mass
+            larger.properties.mass += smaller.properties.mass;
+
+            // Brief temperature boost on larger
+            larger.properties.temperature = Math.max(larger.properties.temperature, smaller.properties.temperature) + 200;
+
+            const debrisCount = Math.min(Math.floor(Math.sqrt(toSceneMass(smaller.properties.mass))) + 2, 6);
+            const spawnOffset = (r1 + r2) * 0.5;
+
+            for (let k = 0; k < debrisCount; k++) {
+                const dir = this.randomSphereDir();
+                const speed = Math.random() * 4.0 + 1.5;
+                debrisToAdd.push({
+                    id: crypto.randomUUID(),
+                    type: CosmicObjectType.ASTEROID,
+                    state: {
+                        position: larger.state.position.add(dir.scale(spawnOffset)),
+                        velocity: larger.state.velocity.add(dir.scale(speed)),
+                        acceleration: Vector3.zero(),
+                        angularVelocity: Vector3.zero(),
+                        orientation: [0, 0, 0, 1]
+                    },
+                    properties: {
+                        mass: smaller.properties.mass / debrisCount,
+                        radius: 0.1 + Math.random() * 0.2,
+                        density: 5000,
+                        temperature: Math.max(smaller.properties.temperature, 1500) + 500,
+                        luminosity: 0, charge: 0, magneticField: 0
+                    },
+                    visual: { color: '#ff8844', emissive: 1.0, opacity: 1 },
+                    isPhysicsEnabled: true, lodLevel: 0,
+                    metadata: { name: 'Debris', createdAt: Date.now(), modifiedAt: Date.now(), isRealObject: false, tags: ['debris', 'rocky'] }
+                });
+            }
+
+            this.recordCollisionEvent(obj1, obj2, 'rocky_collision', 'absorption', larger.state.position, energy);
+        } else {
+            // Symmetric: both destroyed, debris + merged body
+            this.objectsToRemove.add(obj1.id);
+            this.objectsToRemove.add(obj2.id);
+
+            const debrisCount = Math.min(Math.floor(Math.sqrt(toSceneMass(totalMass))) + 3, 8);
+            const spawnOffset = (r1 + r2) * 0.5;
+
+            for (let k = 0; k < debrisCount; k++) {
+                const dir = this.randomSphereDir();
+                const speed = Math.random() * 5.0 + 2.0;
+                debrisToAdd.push({
+                    id: crypto.randomUUID(),
+                    type: CosmicObjectType.ASTEROID,
+                    state: {
+                        position: centerPos.add(dir.scale(spawnOffset)),
+                        velocity: centerVel.add(dir.scale(speed)),
+                        acceleration: Vector3.zero(),
+                        angularVelocity: Vector3.zero(),
+                        orientation: [0, 0, 0, 1]
+                    },
+                    properties: {
+                        mass: totalMass / debrisCount,
+                        radius: 0.15 + Math.random() * 0.25,
+                        density: 5000,
+                        temperature: Math.max(obj1.properties.temperature, obj2.properties.temperature) + 500,
+                        luminosity: 0, charge: 0, magneticField: 0
+                    },
+                    visual: { color: '#ff8844', emissive: 1.0, opacity: 1 },
+                    isPhysicsEnabled: true, lodLevel: 0,
+                    metadata: { name: 'Debris', createdAt: Date.now(), modifiedAt: Date.now(), isRealObject: false, tags: ['debris', 'rocky'] }
+                });
+            }
+
+            this.recordCollisionEvent(obj1, obj2, 'rocky_collision', 'merge', centerPos, energy);
+        }
+    }
+
+    // ─── Category 2: Gas Giant Collisions ────────────────────────────────
+    private handleGasCollision(obj1: CosmicObject, obj2: CosmicObject, debrisToAdd: CosmicObject[]): void {
+        const { centerPos, centerVel, totalMass, m1, m2, energy } = this.getCollisionCenter(obj1, obj2);
+        const r1 = this.getVisualRadius(obj1);
+        const r2 = this.getVisualRadius(obj2);
+        const massRatio = Math.max(m1, m2) / Math.min(m1, m2);
+
+        const gasColors = ['#4488ff', '#8866cc', '#aaccff', '#6644aa', '#ffffff'];
+
+        if (massRatio >= 3) {
+            // Smaller absorbed by gas giant
+            const [larger, smaller] = m1 > m2 ? [obj1, obj2] : [obj2, obj1];
+            this.objectsToRemove.add(smaller.id);
+            larger.properties.mass += smaller.properties.mass;
+
+            // Spawn a few gas cloud puffs that dissipate
+            for (let k = 0; k < 4; k++) {
+                const dir = this.randomSphereDir();
+                const speed = Math.random() * 2 + 0.5;
+                debrisToAdd.push({
+                    id: crypto.randomUUID(),
+                    type: CosmicObjectType.GAS_CLOUD,
+                    state: {
+                        position: larger.state.position.add(dir.scale((r1 + r2) * 0.4)),
+                        velocity: larger.state.velocity.add(dir.scale(speed)),
+                        acceleration: Vector3.zero(),
+                        angularVelocity: Vector3.zero(),
+                        orientation: [0, 0, 0, 1]
+                    },
+                    properties: {
+                        mass: smaller.properties.mass * 0.1 / 4,
+                        radius: 0.3 + Math.random() * 0.4,
+                        density: 5,
+                        temperature: 200,
+                        luminosity: 0, charge: 0, magneticField: 0
+                    },
+                    visual: { color: gasColors[k % gasColors.length], emissive: 0.2, opacity: 0.6 },
+                    isPhysicsEnabled: true, lodLevel: 0,
+                    metadata: { name: 'Gas Puff', createdAt: Date.now(), modifiedAt: Date.now(), isRealObject: false, tags: ['debris', 'gas'] }
+                });
+            }
+
+            this.recordCollisionEvent(obj1, obj2, 'gas_collision', 'absorption', larger.state.position, energy);
+        } else {
+            // Both destroyed, gas cloud debris
+            this.objectsToRemove.add(obj1.id);
+            this.objectsToRemove.add(obj2.id);
+
+            const debrisCount = Math.min(Math.floor(Math.sqrt(toSceneMass(totalMass))) + 4, 12);
+            const spawnOffset = (r1 + r2) * 0.6;
+
+            for (let k = 0; k < debrisCount; k++) {
+                const dir = this.randomSphereDir();
+                const speed = Math.random() * 3.0 + 1.0;
+                debrisToAdd.push({
+                    id: crypto.randomUUID(),
+                    type: CosmicObjectType.GAS_CLOUD,
+                    state: {
+                        position: centerPos.add(dir.scale(spawnOffset)),
+                        velocity: centerVel.add(dir.scale(speed)),
+                        acceleration: Vector3.zero(),
+                        angularVelocity: Vector3.zero(),
+                        orientation: [0, 0, 0, 1]
+                    },
+                    properties: {
+                        mass: totalMass / debrisCount,
+                        radius: 0.3 + Math.random() * 0.5,
+                        density: 1 + Math.random() * 9,
+                        temperature: 150 + Math.random() * 100,
+                        luminosity: 0, charge: 0, magneticField: 0
+                    },
+                    visual: {
+                        color: gasColors[k % gasColors.length],
+                        emissive: 0.15,
+                        opacity: 0.5 + Math.random() * 0.2
+                    },
+                    isPhysicsEnabled: true, lodLevel: 0,
+                    metadata: { name: 'Gas Cloud', createdAt: Date.now(), modifiedAt: Date.now(), isRealObject: false, tags: ['debris', 'gas'] }
+                });
+            }
+
+            this.recordCollisionEvent(obj1, obj2, 'gas_collision', 'merge', centerPos, energy);
+        }
+    }
+
+    // ─── Category 3: Stellar Collision → Nebula ─────────────────────────
+    private handleStellarCollision(obj1: CosmicObject, obj2: CosmicObject, debrisToAdd: CosmicObject[]): void {
+        const { centerPos, centerVel, totalMass, m1, m2, energy } = this.getCollisionCenter(obj1, obj2);
+        const r1 = this.getVisualRadius(obj1);
+        const r2 = this.getVisualRadius(obj2);
+        const massRatio = Math.max(m1, m2) / Math.min(m1, m2);
+
+        // If one is a STAR and the other is a small non-star, star absorbs it
+        const isStar1 = obj1.type === CosmicObjectType.STAR;
+        const isStar2 = obj2.type === CosmicObjectType.STAR;
+        const isNS1 = obj1.type === CosmicObjectType.NEUTRON_STAR;
+        const isNS2 = obj2.type === CosmicObjectType.NEUTRON_STAR;
+
+        if ((isStar1 && !isStar2 && !isNS2) || (isStar2 && !isStar1 && !isNS1)) {
+            // Star absorbs smaller non-star/non-NS object
+            const [star, other] = isStar1 ? [obj1, obj2] : [obj2, obj1];
+            this.objectsToRemove.add(other.id);
+            star.properties.mass += other.properties.mass;
+            star.properties.temperature += 500; // Brief flare
+
+            // Spawn a few flare particles
+            for (let k = 0; k < 5; k++) {
+                const dir = this.randomSphereDir();
+                const speed = Math.random() * 6 + 2;
+                debrisToAdd.push({
+                    id: crypto.randomUUID(),
+                    type: CosmicObjectType.GAS_CLOUD,
+                    state: {
+                        position: star.state.position.add(dir.scale(r1 * 0.8)),
+                        velocity: star.state.velocity.add(dir.scale(speed)),
+                        acceleration: Vector3.zero(),
+                        angularVelocity: Vector3.zero(),
+                        orientation: [0, 0, 0, 1]
+                    },
+                    properties: {
+                        mass: other.properties.mass * 0.05,
+                        radius: 0.15, density: 100,
+                        temperature: 8000, luminosity: 1e24,
+                        charge: 0, magneticField: 0
+                    },
+                    visual: { color: '#ffcc44', emissive: 1.0, opacity: 0.9 },
+                    isPhysicsEnabled: true, lodLevel: 0,
+                    metadata: { name: 'Stellar Flare', createdAt: Date.now(), modifiedAt: Date.now(), isRealObject: false, tags: ['debris', 'stellar_flare'] }
+                });
+            }
+
+            this.recordCollisionEvent(obj1, obj2, 'stellar_collision', 'absorption', star.state.position, energy);
+            return;
+        }
+
+        // Star+Star or Star+NeutronStar: massive explosion + nebula
+        this.objectsToRemove.add(obj1.id);
+        this.objectsToRemove.add(obj2.id);
+
+        // For Star+NS: check if result should be a black hole (combined mass > 3 solar masses)
+        if ((isStar1 && isNS2) || (isStar2 && isNS1)) {
+            const TOV_LIMIT = 3 * AstronomicalUnits.M_sun;
+            if (totalMass > TOV_LIMIT) {
+                // Forms a black hole
+                const bh = createBlackHole({
+                    name: 'Collision Black Hole',
+                    position: centerPos,
+                    velocity: centerVel,
+                    massSolarUnits: totalMass / AstronomicalUnits.M_sun,
+                    isAccreting: true,
+                });
+                debrisToAdd.push(bh);
+                this.recordCollisionEvent(obj1, obj2, 'stellar_collision', 'merge', centerPos, energy * 10, bh.id);
+                return;
+            }
+        }
+
+        // Spawn 15-30 high-velocity debris
+        const debrisCount = 15 + Math.floor(Math.random() * 16);
+        const stellarColors = ['#ffffff', '#aaccff', '#ffaa44', '#ff6633', '#88bbff'];
+        const spawnOffset = (r1 + r2) * 0.6;
+
+        for (let k = 0; k < debrisCount; k++) {
+            const dir = this.randomSphereDir();
+            const speed = Math.random() * 12 + 5;
+            const isGas = Math.random() > 0.3;
+            debrisToAdd.push({
+                id: crypto.randomUUID(),
+                type: isGas ? CosmicObjectType.GAS_CLOUD : CosmicObjectType.ASTEROID,
+                state: {
+                    position: centerPos.add(dir.scale(spawnOffset)),
+                    velocity: centerVel.add(dir.scale(speed)),
+                    acceleration: Vector3.zero(),
+                    angularVelocity: Vector3.zero(),
+                    orientation: [0, 0, 0, 1]
+                },
+                properties: {
+                    mass: totalMass * 0.01,
+                    radius: isGas ? 0.2 + Math.random() * 0.4 : 0.1 + Math.random() * 0.15,
+                    density: isGas ? 10 : 3000,
+                    temperature: 15000 + Math.random() * 10000,
+                    luminosity: 1e25, charge: 0, magneticField: 0
+                },
+                visual: {
+                    color: stellarColors[k % stellarColors.length],
+                    emissive: 1.0,
+                    opacity: isGas ? 0.7 : 1.0
+                },
+                isPhysicsEnabled: true, lodLevel: 0,
+                metadata: { name: 'Stellar Debris', createdAt: Date.now(), modifiedAt: Date.now(), isRealObject: false, tags: ['debris', 'stellar'] }
+            });
+        }
+
+        // Spawn nebula at collision center
+        const massSolar = totalMass / AstronomicalUnits.M_sun;
+        const nebulaExtent = Math.min(Math.max(2 + massSolar * 0.5, 2), 30);
+
+        const nebula = createNebula({
+            name: 'Collision Nebula',
+            position: centerPos,
+            nebulaType: 'supernova_remnant',
+            sizeParsecs: 0.001, // Small in parsecs, we override extent below
+        });
+        // Override properties for collision-spawned nebula
+        nebula.properties.mass = totalMass * 0.7; // 70% of mass stays in nebula
+        nebula.isPhysicsEnabled = true;
+        nebula.state.velocity = centerVel;
+        (nebula as Nebula).extent = new Vector3(nebulaExtent, nebulaExtent, nebulaExtent);
+        (nebula as Nebula).nebulaOriginMass = totalMass;
+        debrisToAdd.push(nebula);
+
+        this.recordCollisionEvent(obj1, obj2, 'stellar_collision', 'merge', centerPos, energy * 5, nebula.id);
+    }
+
+    // ─── Category 4: Kilonova (NS + NS → Black Hole) ────────────────────
+    private handleKilonovaCollision(obj1: CosmicObject, obj2: CosmicObject, debrisToAdd: CosmicObject[]): void {
+        const { centerPos, centerVel, totalMass, energy } = this.getCollisionCenter(obj1, obj2);
+        const r1 = this.getVisualRadius(obj1);
+        const r2 = this.getVisualRadius(obj2);
+
+        this.objectsToRemove.add(obj1.id);
+        this.objectsToRemove.add(obj2.id);
+
+        // Phase 1: Massive particle explosion (30-50 debris pieces)
+        const debrisCount = 30 + Math.floor(Math.random() * 21);
+        const debrisIds: string[] = [];
+        const spawnOffset = (r1 + r2) * 0.5;
+
+        for (let k = 0; k < debrisCount; k++) {
+            const dir = this.randomSphereDir();
+            const speed = Math.random() * 20 + 8; // Very high velocity
+            const debrisId = crypto.randomUUID();
+            debrisIds.push(debrisId);
+
+            debrisToAdd.push({
+                id: debrisId,
+                type: CosmicObjectType.ASTEROID,
+                state: {
+                    position: centerPos.add(dir.scale(spawnOffset)),
+                    velocity: centerVel.add(dir.scale(speed)),
+                    acceleration: Vector3.zero(),
+                    angularVelocity: Vector3.zero(),
+                    orientation: [0, 0, 0, 1]
+                },
+                properties: {
+                    mass: totalMass / debrisCount,
+                    radius: 0.08 + Math.random() * 0.12,
+                    density: 1e17, // Neutron degenerate matter
+                    temperature: 50000 + Math.random() * 50000,
+                    luminosity: 1e28, charge: 0, magneticField: 1e9
+                },
+                visual: { color: '#ccddff', emissive: 1.0, opacity: 1 },
+                isPhysicsEnabled: true, lodLevel: 0,
+                metadata: { name: 'Kilonova Ejecta', createdAt: Date.now(), modifiedAt: Date.now(), isRealObject: false, tags: ['debris', 'kilonova_debris'] }
+            });
+        }
+
+        // Register kilonova collapse event (black hole forms after 5s)
+        this.kilonovaCollapses.push({
+            centerPos: centerPos.clone(),
+            centerVel: centerVel.clone(),
+            combinedMass: totalMass,
+            timestamp: Date.now(),
+            debrisIds,
+        });
+
+        this.recordCollisionEvent(obj1, obj2, 'kilonova', 'merge', centerPos, energy * 20);
+    }
+
+    // ─── Category 5A: Black Hole Merger ──────────────────────────────────
+    private handleBlackHoleMerger(obj1: CosmicObject, obj2: CosmicObject, debrisToAdd: CosmicObject[]): void {
+        const { centerPos, centerVel, totalMass, energy } = this.getCollisionCenter(obj1, obj2);
+
+        this.objectsToRemove.add(obj1.id);
+        this.objectsToRemove.add(obj2.id);
+
+        // Clean merger: new larger black hole
+        const bh1 = obj1 as any;
+        const bh2 = obj2 as any;
+        const avgSpin = ((bh1.spin ?? 0) + (bh2.spin ?? 0)) / 2;
+        const isAccreting = (bh1.isAccreting || bh2.isAccreting) ?? false;
+
+        const newBH = createBlackHole({
+            name: 'Merged Black Hole',
+            position: centerPos,
+            velocity: centerVel,
+            massSolarUnits: totalMass / AstronomicalUnits.M_sun,
+            spin: avgSpin,
+            isAccreting,
+        });
+        debrisToAdd.push(newBH);
+
+        this.recordCollisionEvent(obj1, obj2, 'blackhole_merger', 'merge', centerPos, energy * 0.05, newBH.id);
+    }
+
+    // ─── Category 5B: Tidal Disruption / Spaghettification ──────────────
+    private handleTidalDisruption(obj1: CosmicObject, obj2: CosmicObject, debrisToAdd: CosmicObject[]): void {
+        // Determine which is the black hole / neutron star and which is the victim
+        const isBH1 = obj1.type === CosmicObjectType.BLACK_HOLE;
+        const isBH2 = obj2.type === CosmicObjectType.BLACK_HOLE;
+        const isNS1 = obj1.type === CosmicObjectType.NEUTRON_STAR;
+        const isNS2 = obj2.type === CosmicObjectType.NEUTRON_STAR;
+
+        let attractor: CosmicObject;
+        let victim: CosmicObject;
+
+        if (isBH1) { attractor = obj1; victim = obj2; }
+        else if (isBH2) { attractor = obj2; victim = obj1; }
+        else if (isNS1) { attractor = obj1; victim = obj2; }
+        else { attractor = obj2; victim = obj1; }
+
+        // Victim is destroyed, attractor persists
+        this.objectsToRemove.add(victim.id);
+        attractor.properties.mass += victim.properties.mass;
+
+        // Set accreting if it's a black hole
+        if (attractor.type === CosmicObjectType.BLACK_HOLE) {
+            (attractor as any).isAccreting = true;
+        }
+
+        const { energy } = this.getCollisionCenter(obj1, obj2);
+
+        // Spawn 10-20 debris in a spiral/orbital pattern around the attractor
+        const debrisCount = 10 + Math.floor(Math.random() * 11);
+        const attractorR = this.getVisualRadius(attractor);
+        const orbitRadius = attractorR * 2.5;
+
+        // Pick an arbitrary orbital plane (mostly XZ with slight Y)
+        for (let k = 0; k < debrisCount; k++) {
+            const angle = (k / debrisCount) * Math.PI * 2 + Math.random() * 0.3;
+            const r = orbitRadius * (1.0 + Math.random() * 1.5);
+            const yOffset = (Math.random() - 0.5) * 0.3; // Slight out-of-plane
+
+            // Position in orbit around attractor
+            const px = attractor.state.position.x + Math.cos(angle) * r;
+            const py = attractor.state.position.y + yOffset;
+            const pz = attractor.state.position.z + Math.sin(angle) * r;
+
+            // Tangential velocity for orbital motion
+            const orbitalSpeed = 4 + Math.random() * 6;
+            const vx = attractor.state.velocity.x + (-Math.sin(angle)) * orbitalSpeed;
+            const vy = attractor.state.velocity.y;
+            const vz = attractor.state.velocity.z + Math.cos(angle) * orbitalSpeed;
+
+            debrisToAdd.push({
+                id: crypto.randomUUID(),
+                type: CosmicObjectType.GAS_CLOUD,
+                state: {
+                    position: new Vector3(px, py, pz),
+                    velocity: new Vector3(vx, vy, vz),
+                    acceleration: Vector3.zero(),
+                    angularVelocity: Vector3.zero(),
+                    orientation: [0, 0, 0, 1]
+                },
+                properties: {
+                    mass: victim.properties.mass / debrisCount,
+                    radius: 0.1 + Math.random() * 0.15,
+                    density: 100,
+                    temperature: 30000 + Math.random() * 30000,
+                    luminosity: 1e27, charge: 0, magneticField: 0
+                },
+                visual: {
+                    color: k % 3 === 0 ? '#ffffff' : k % 3 === 1 ? '#ffdd66' : '#88aaff',
+                    emissive: 1.0,
+                    opacity: 0.9
+                },
+                isPhysicsEnabled: true, lodLevel: 0,
+                metadata: { name: 'Accretion Stream', createdAt: Date.now(), modifiedAt: Date.now(), isRealObject: false, tags: ['debris', 'tidal'] }
+            });
+        }
+
+        this.recordCollisionEvent(obj1, obj2, 'tidal_disruption', 'absorption', attractor.state.position, energy * 8);
+    }
+
+    /**
+     * Process nebula evolution: check for star formation and dissipation
+     */
+    private processNebulaEvolution(): void {
+        const STAR_FORMATION_AGE_MS = 30000; // 30 seconds real time
+        const STAR_FORMATION_MASS_THRESHOLD = 5 * AstronomicalUnits.M_sun;
+        const STAR_MASS_FRACTION = 0.2; // Each star takes 20% of remaining mass
+        const DISSIPATION_MASS = 0.5 * AstronomicalUnits.M_sun; // Remove when below this
+        const now = Date.now();
+
+        const nebulae = Array.from(this.objects.values())
+            .filter(obj => obj.type === CosmicObjectType.NEBULA) as Nebula[];
+
+        for (const nebula of nebulae) {
+            const age = now - nebula.metadata.createdAt;
+
+            // Check for star formation
+            if (age > STAR_FORMATION_AGE_MS &&
+                nebula.properties.mass > STAR_FORMATION_MASS_THRESHOLD &&
+                nebula.nebulaOriginMass !== undefined) {
+
+                // Spawn 1-3 baby stars
+                const starCount = 1 + Math.floor(Math.random() * 3);
+                const extent = nebula.extent;
+
+                for (let i = 0; i < starCount; i++) {
+                    if (nebula.properties.mass <= STAR_FORMATION_MASS_THRESHOLD) break;
+
+                    const starMass = nebula.properties.mass * STAR_MASS_FRACTION;
+                    nebula.properties.mass -= starMass;
+
+                    // Random position within nebula extent
+                    const offset = new Vector3(
+                        (Math.random() - 0.5) * extent.x * 0.8,
+                        (Math.random() - 0.5) * extent.y * 0.8,
+                        (Math.random() - 0.5) * extent.z * 0.8
+                    );
+
+                    const babyStar = createStar({
+                        name: `Baby Star ${i + 1}`,
+                        position: nebula.state.position.add(offset),
+                        velocity: nebula.state.velocity.add(new Vector3(
+                            (Math.random() - 0.5) * 0.5,
+                            (Math.random() - 0.5) * 0.5,
+                            (Math.random() - 0.5) * 0.5
+                        )),
+                        massSolarUnits: starMass / AstronomicalUnits.M_sun,
+                    });
+
+                    this.objects.set(babyStar.id, babyStar);
+                }
+
+                // Push forward the creation time to delay next star formation cycle
+                nebula.metadata.createdAt = now;
+            }
+
+            // Dissipate nebula when mass is too low
+            if (nebula.properties.mass < DISSIPATION_MASS) {
+                this.objects.delete(nebula.id);
+            }
+        }
+
+        this.stats.objectCount = this.objects.size;
+    }
+
+    /**
+     * Process kilonova collapses: after 5 seconds, debris collapses into black hole
+     */
+    private processKilonovaCollapse(): void {
+        const COLLAPSE_DELAY_MS = 5000; // 5 seconds real time
+        const now = Date.now();
+
+        const completed: number[] = [];
+
+        for (let i = 0; i < this.kilonovaCollapses.length; i++) {
+            const kn = this.kilonovaCollapses[i];
+            if (now - kn.timestamp >= COLLAPSE_DELAY_MS) {
+                // Remove all kilonova debris
+                for (const debrisId of kn.debrisIds) {
+                    this.objects.delete(debrisId);
+                }
+
+                // Spawn black hole at center
+                const bh = createBlackHole({
+                    name: 'Kilonova Black Hole',
+                    position: kn.centerPos,
+                    velocity: kn.centerVel,
+                    massSolarUnits: kn.combinedMass / AstronomicalUnits.M_sun,
+                    isAccreting: true,
+                    spin: 0.7, // High spin from angular momentum
+                });
+                this.objects.set(bh.id, bh);
+
+                completed.push(i);
+            }
+        }
+
+        // Remove completed collapses (reverse order to keep indices valid)
+        for (let i = completed.length - 1; i >= 0; i--) {
+            this.kilonovaCollapses.splice(completed[i], 1);
+        }
+
+        if (completed.length > 0) {
+            this.stats.objectCount = this.objects.size;
+        }
     }
 
     /**
@@ -534,6 +1165,12 @@ export class NBodyEngine {
 
         // STEP 5: Process collisions
         this.processCollisions();
+
+        // STEP 6: Process nebula evolution (star formation)
+        this.processNebulaEvolution();
+
+        // STEP 7: Process kilonova collapses (delayed black hole formation)
+        this.processKilonovaCollapse();
 
         this.stats.lastUpdateTime = performance.now() - startTime;
     }

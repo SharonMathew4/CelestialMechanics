@@ -12,6 +12,7 @@ import { create } from 'zustand';
 import {
     CosmicObject,
     CosmicObjectId,
+    CollisionType,
 } from '@/engine/physics/types';
 import {
     PhysicsConfig,
@@ -78,6 +79,7 @@ export interface VisualCollisionEvent {
     position: [number, number, number];
     timestamp: number;
     energy: number;
+    collisionType: CollisionType;
 }
 
 /**
@@ -256,7 +258,7 @@ export const useSimulationStore = create<SimulationState>()((set, get) => ({
                     const newCollisionEvents = [...state.collisionEvents];
 
                     if (collisionUpdate) {
-                        const { removed, added } = collisionUpdate;
+                        const { removed, added, collisionEvents: engineCollisionEvents } = collisionUpdate;
 
                         // Remove destroyed objects
                         for (const removedId of removed) {
@@ -279,8 +281,19 @@ export const useSimulationStore = create<SimulationState>()((set, get) => ({
                         }
 
                         // Generate visual collision events for particle effects
-                        // Approximate collision position as midpoint of removed objects
-                        if (removed.length >= 2) {
+                        // Use engine collision events if available, otherwise approximate
+                        if (engineCollisionEvents && engineCollisionEvents.length > 0) {
+                            for (const evt of engineCollisionEvents) {
+                                newCollisionEvents.push({
+                                    id: crypto.randomUUID(),
+                                    position: [evt.position.x, evt.position.y, evt.position.z],
+                                    timestamp: Date.now(),
+                                    energy: evt.energy,
+                                    collisionType: evt.collisionType || 'rocky_collision',
+                                });
+                            }
+                        } else if (removed.length >= 2) {
+                            // Fallback: approximate collision position as midpoint
                             const pos1 = state.objects.get(removed[0])?.state.position;
                             const pos2 = state.objects.get(removed[1])?.state.position;
                             if (pos1 && pos2) {
@@ -292,6 +305,7 @@ export const useSimulationStore = create<SimulationState>()((set, get) => ({
                                     position: [midX, midY, midZ],
                                     timestamp: Date.now(),
                                     energy: 1.0,
+                                    collisionType: 'rocky_collision',
                                 });
                             }
                         }

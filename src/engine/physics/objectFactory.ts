@@ -415,8 +415,10 @@ export function createGalaxy(options: {
 export function createNebula(options: {
     name?: string;
     position?: Vector3;
+    velocity?: Vector3;
     nebulaType?: 'emission' | 'reflection' | 'dark' | 'planetary' | 'supernova_remnant';
     sizeParsecs?: number;
+    mass?: number;
 }): Nebula {
     const nebulaType = options.nebulaType ?? 'emission';
     const size = (options.sizeParsecs ?? 10) * AstronomicalUnits.pc;
@@ -432,9 +434,9 @@ export function createNebula(options: {
     return {
         id: generateId(),
         type: CosmicObjectType.NEBULA,
-        state: createDefaultState(options.position),
+        state: createDefaultState(options.position, options.velocity),
         properties: {
-            mass: 1e30, // Rough nebula mass
+            mass: options.mass ?? 1e30, // Rough nebula mass
             radius: size,
             temperature: nebulaType === 'emission' ? 10000 : 100,
             density: 1e-21,

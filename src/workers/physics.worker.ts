@@ -119,12 +119,16 @@ function step() {
             }
         }));
 
+        // Get collision events from engine and include them
+        const collisionEvents = engine.getCollisionEvents();
+
         message.collisionUpdate = {
             removed: removedIds,
             added: serializedAdded,
+            collisionEvents: collisionEvents,
         };
 
-        if (DEBUG) console.log(`[Worker] Collision: removed=${removedIds.length}, added=${addedObjects.length}`);
+        if (DEBUG) console.log(`[Worker] Collision: removed=${removedIds.length}, added=${addedObjects.length}, events=${collisionEvents.length}`);
     }
 
     (self as any).postMessage(message, [buffer.buffer]);

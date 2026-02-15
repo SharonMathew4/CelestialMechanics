@@ -591,7 +591,7 @@ function PlacementPreview() {
 
                 // Match scene-scale gravity from nbody.ts
                 const mass1 = Math.max(Math.log10(Math.max(obj.properties.mass, 1)), 1);
-                const G = 2.0;
+                const G = 20.0;
                 const accMag = (G * mass1) / Math.max(distSq, 1.0);
 
                 if (dist > 0.1) {

@@ -13,6 +13,17 @@ import { Vector3 } from './vector';
 export type CosmicObjectId = string;
 
 /**
+ * Collision type classification for type-based collision physics
+ */
+export type CollisionType =
+    | 'rocky_collision'
+    | 'gas_collision'
+    | 'stellar_collision'
+    | 'kilonova'
+    | 'blackhole_merger'
+    | 'tidal_disruption';
+
+/**
  * Base classification of cosmic objects
  */
 export enum CosmicObjectType {
@@ -321,6 +332,9 @@ export interface Nebula extends CosmicObject {
 
     /** Ionization fraction (0-1) */
     ionizationFraction: number;
+
+    /** Original combined mass from collision that formed this nebula (for star formation) */
+    nebulaOriginMass?: number;
 }
 
 /**
