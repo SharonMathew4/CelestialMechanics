@@ -41,6 +41,9 @@ export interface PhysicsConfig {
 
     /** Enable debug logging */
     enableDebugLogging: boolean;
+
+    /** Velocity damping factor (0.99-1.0, where 1.0 = no damping) */
+    velocityDamping: number;
 }
 
 /**
@@ -55,6 +58,7 @@ export const DEFAULT_PHYSICS_CONFIG: PhysicsConfig = {
     maxVelocity: 200,       // Scene units per second
     enableCollisions: true,
     enableDebugLogging: false,
+    velocityDamping: 1.0,   // No damping by default
 };
 
 /**
