@@ -2,14 +2,11 @@
   "name": "celestialmechanics",
   "version": "1.0.0",
   "description": "Scientific cosmic simulation platform for observing and simulating the universe",
-  "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "electron:dev": "concurrently \"vite\" \"electron .\"",
-    "electron:build": "vite build && electron-builder",
     "test": "vitest",
     "test:run": "vitest run",
     "lint": "eslint src --ext .ts,.tsx"
@@ -46,34 +43,10 @@
     "@typescript-eslint/eslint-plugin": "^8.54.0",
     "@typescript-eslint/parser": "^8.54.0",
     "@vitejs/plugin-react": "^4.2.1",
-    "concurrently": "^8.2.2",
     "cross-env": "^10.1.0",
-    "electron": "^40.1.0",
-    "electron-builder": "^26.6.0",
     "eslint": "^9.39.2",
     "typescript": "^5.3.3",
     "vite": "^7.3.1",
-    "vitest": "^4.0.18",
-    "wait-on": "^9.0.3"
-  },
-  "build": {
-    "appId": "com.celestialmechanics.app",
-    "productName": "CelestialMechanics",
-    "directories": {
-      "output": "dist-electron"
-    },
-    "files": [
-      "dist/**/*",
-      "electron/**/*"
-    ],
-    "win": {
-      "target": "dir",
-      "extraFiles": [
-        {
-          "from": "node_modules/electron/dist/ffmpeg.dll",
-          "to": "."
-        }
-      ]
-    }
+    "vitest": "^4.0.18"
   }
 }
