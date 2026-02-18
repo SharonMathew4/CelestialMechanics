@@ -460,6 +460,333 @@ function DebrisMesh({ object, isSelected, isHovered, onSelect, onHover }: Object
 }
 
 /**
+ * Nebula mesh — procedural GLSL shader for realistic post-collision nebulae
+ * Features: FBM noise clouds, shell falloff, 4 visual styles, multi-color zones
+ * References: Cassiopeia A, Ring Nebula, Crab Nebula, Blue Ring Nebula
+ */
+
+const nebulaVertexShader = `
+varying vec3 vPosition;
+varying vec3 vNormal;
+varying vec2 vUv;
+
+void main() {
+    vPosition = position;
+    vNormal = normalize(normalMatrix * normal);
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const nebulaFragmentShader = `
+uniform float uTime;
+uniform float uRadius;
+uniform int uStyle;    // 0=ring, 1=supernova_remnant, 2=emission, 3=blue_bubble
+uniform vec3 uColor1;  // Primary color
+uniform vec3 uColor2;  // Secondary color
+uniform vec3 uColor3;  // Tertiary (filament) color
+
+varying vec3 vPosition;
+varying vec3 vNormal;
+varying vec2 vUv;
+
+// Simplex-style hash
+vec3 hash3(vec3 p) {
+    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+             dot(p, vec3(269.5, 183.3, 246.1)),
+             dot(p, vec3(113.5, 271.9, 124.6)));
+    return fract(sin(p) * 43758.5453123) * 2.0 - 1.0;
+}
+
+// 3D noise
+float noise3d(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    vec3 u = f * f * (3.0 - 2.0 * f);
+
+    float n000 = dot(hash3(i + vec3(0,0,0)), f - vec3(0,0,0));
+    float n100 = dot(hash3(i + vec3(1,0,0)), f - vec3(1,0,0));
+    float n010 = dot(hash3(i + vec3(0,1,0)), f - vec3(0,1,0));
+    float n110 = dot(hash3(i + vec3(1,1,0)), f - vec3(1,1,0));
+    float n001 = dot(hash3(i + vec3(0,0,1)), f - vec3(0,0,1));
+    float n101 = dot(hash3(i + vec3(1,0,1)), f - vec3(1,0,1));
+    float n011 = dot(hash3(i + vec3(0,1,1)), f - vec3(0,1,1));
+    float n111 = dot(hash3(i + vec3(1,1,1)), f - vec3(1,1,1));
+
+    float nx00 = mix(n000, n100, u.x);
+    float nx10 = mix(n010, n110, u.x);
+    float nx01 = mix(n001, n101, u.x);
+    float nx11 = mix(n011, n111, u.x);
+    float nxy0 = mix(nx00, nx10, u.y);
+    float nxy1 = mix(nx01, nx11, u.y);
+    return mix(nxy0, nxy1, u.z) * 0.5 + 0.5;
+}
+
+// FBM — fractal Brownian motion
+float fbm(vec3 p, int octaves) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    for (int i = 0; i < 6; i++) {
+        if (i >= octaves) break;
+        value += amplitude * noise3d(p * frequency);
+        frequency *= 2.0;
+        amplitude *= 0.5;
+    }
+    return value;
+}
+
+void main() {
+    vec3 pos = vPosition / uRadius;
+    float dist = length(pos);
+
+    // Animated slow rotation via noise offset
+    float t = uTime * 0.02;
+    vec3 animPos = pos + vec3(sin(t * 0.3) * 0.1, cos(t * 0.2) * 0.05, t * 0.05);
+
+    float density = 0.0;
+    vec3 finalColor = vec3(0.0);
+
+    if (uStyle == 0) {
+        // === RING / BUBBLE NEBULA ===
+        // Torus-like shell: bright at mid-radius, hollow interior
+        float ringDist = length(vec2(length(pos.xz) - 0.55, pos.y * 1.5));
+        float shell = smoothstep(0.35, 0.2, ringDist) * smoothstep(0.0, 0.05, ringDist);
+        float clouds = fbm(animPos * 4.0, 5);
+        density = shell * (0.5 + clouds * 0.8);
+
+        // Color: blue core, pink/red filaments at edge
+        float edgeFactor = smoothstep(0.15, 0.3, ringDist);
+        finalColor = mix(uColor1, uColor3, edgeFactor * clouds);
+        finalColor = mix(finalColor, uColor2, (1.0 - dist) * 0.3);
+
+    } else if (uStyle == 1) {
+        // === SUPERNOVA REMNANT ===
+        // Asymmetric filamentary shell
+        float innerR = 0.5;
+        float outerR = 0.85;
+        float shell = smoothstep(innerR - 0.1, innerR, dist) * (1.0 - smoothstep(outerR, outerR + 0.15, dist));
+        float filaments = fbm(animPos * 6.0 + vec3(0.0, t, 0.0), 6);
+        float wisps = pow(filaments, 2.0) * 1.5;
+        density = shell * (0.2 + wisps * 1.2);
+
+        // Multi-color zones: inner hot white, mid blue, outer red filaments
+        float innerGlow = smoothstep(0.6, 0.3, dist);
+        vec3 hotCore = vec3(1.0, 0.95, 0.85) * innerGlow;
+        vec3 midShell = uColor1 * shell;
+        vec3 outerFilament = uColor3 * wisps * smoothstep(0.5, 0.8, dist);
+        finalColor = hotCore + midShell + outerFilament;
+
+    } else if (uStyle == 2) {
+        // === EMISSION NEBULA ===
+        // Filled cloud with bright knots
+        float falloff = 1.0 - smoothstep(0.0, 0.9, dist);
+        float clouds = fbm(animPos * 3.0, 5);
+        float knots = pow(fbm(animPos * 8.0 + 10.0, 4), 3.0) * 3.0;
+        density = falloff * (clouds * 0.6 + knots * 0.4);
+
+        // Color: warm red/orange with bright white knots
+        finalColor = mix(uColor3, uColor1, clouds);
+        finalColor = mix(finalColor, vec3(1.5, 1.3, 1.0), knots * 0.5);
+        finalColor += uColor2 * falloff * 0.15;
+
+    } else {
+        // === BLUE BUBBLE ===
+        // Smooth expanding shell in blue-white
+        float innerR = 0.55;
+        float outerR = 0.75;
+        float shell = smoothstep(innerR - 0.1, innerR, dist) * (1.0 - smoothstep(outerR, outerR + 0.2, dist));
+        float surface = fbm(animPos * 5.0, 4) * 0.6 + 0.4;
+        density = shell * surface;
+
+        // Bright edge glow
+        float edgeBright = smoothstep(innerR, outerR, dist) * (1.0 - smoothstep(outerR, outerR + 0.1, dist));
+        finalColor = uColor1 * shell + vec3(0.8, 0.9, 1.0) * edgeBright * 2.0;
+        finalColor += uColor2 * 0.1 * (1.0 - dist);
+    }
+
+    // Center glow for all styles
+    float centerGlow = exp(-dist * dist * 8.0) * 0.4;
+    finalColor += vec3(1.0, 0.9, 0.8) * centerGlow;
+
+    // Clamp density
+    density = clamp(density, 0.0, 1.0);
+
+    // Viewing angle: fresnel-like edge brightening
+    float viewDot = abs(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0)));
+    float fresnel = pow(1.0 - viewDot, 1.5) * 0.3 + 0.7;
+    density *= fresnel;
+
+    // Alpha from density
+    float alpha = density * 0.65;
+
+    // Discard fully transparent fragments
+    if (alpha < 0.005) discard;
+
+    gl_FragColor = vec4(finalColor * (1.0 + density * 0.5), alpha);
+}
+`;
+
+function NebulaMesh({ object, isSelected, isHovered, onSelect, onHover }: ObjectMeshProps) {
+    const groupRef = useRef<THREE.Group>(null);
+    const shaderRef = useRef<THREE.ShaderMaterial>(null);
+    const pos = object.state.position;
+
+    // Nebula extent determines visual size
+    const nebulaObj = object as any;
+    const extent = nebulaObj.extent || { x: 50, y: 50, z: 50 };
+    const baseRadius = Math.max(extent.x, extent.y, extent.z);
+
+    // Parse nebula style from metadata tags (nebulaStyle_0 through nebulaStyle_3)
+    const nebulaStyle = useMemo(() => {
+        const tags = object.metadata?.tags || [];
+        for (const tag of tags) {
+            const match = tag.match(/nebulaStyle_(\d)/);
+            if (match) return parseInt(match[1], 10);
+        }
+        return Math.floor(Math.random() * 4); // Fallback random
+    }, [object.metadata?.tags]);
+
+    // Style-based color palettes
+    const colors = useMemo(() => {
+        switch (nebulaStyle) {
+            case 0: // Ring nebula: blue core, green-blue mid, pink filaments
+                return {
+                    c1: new THREE.Color('#4488ff'),
+                    c2: new THREE.Color('#66ddcc'),
+                    c3: new THREE.Color('#ff4488'),
+                };
+            case 1: // Supernova remnant: blue shell, orange-gold, red filaments
+                return {
+                    c1: new THREE.Color('#4499ff'),
+                    c2: new THREE.Color('#ffaa33'),
+                    c3: new THREE.Color('#ff3344'),
+                };
+            case 2: // Emission nebula: red dominant, blue knots, white hot
+                return {
+                    c1: new THREE.Color('#ff6644'),
+                    c2: new THREE.Color('#4488ff'),
+                    c3: new THREE.Color('#ff3366'),
+                };
+            case 3: // Blue bubble: blue-white shell
+            default:
+                return {
+                    c1: new THREE.Color('#4488ff'),
+                    c2: new THREE.Color('#88ccff'),
+                    c3: new THREE.Color('#aaddff'),
+                };
+        }
+    }, [nebulaStyle]);
+
+    const uniforms = useMemo(() => ({
+        uTime: { value: 0 },
+        uRadius: { value: baseRadius },
+        uStyle: { value: nebulaStyle },
+        uColor1: { value: colors.c1 },
+        uColor2: { value: colors.c2 },
+        uColor3: { value: colors.c3 },
+    }), [baseRadius, nebulaStyle, colors]);
+
+    // Animate shader time
+    useFrame((state) => {
+        if (shaderRef.current) {
+            shaderRef.current.uniforms.uTime.value = state.clock.elapsedTime;
+        }
+    });
+
+    return (
+        <group ref={groupRef} position={[pos.x, pos.y, pos.z]}>
+            {/* Main nebula sphere with procedural shader */}
+            <mesh
+                onClick={onSelect}
+                onPointerOver={() => onHover(true)}
+                onPointerOut={() => onHover(false)}
+            >
+                <sphereGeometry args={[baseRadius, 64, 64]} />
+                <shaderMaterial
+                    ref={shaderRef}
+                    vertexShader={nebulaVertexShader}
+                    fragmentShader={nebulaFragmentShader}
+                    uniforms={uniforms}
+                    transparent
+                    depthWrite={false}
+                    side={THREE.DoubleSide}
+                    blending={THREE.AdditiveBlending}
+                    toneMapped={false}
+                />
+            </mesh>
+
+            {/* Center point light */}
+            <pointLight
+                color={colors.c1}
+                intensity={1.5}
+                distance={baseRadius * 3}
+                decay={2}
+            />
+
+            {/* Selection ring */}
+            {isSelected && (
+                <mesh rotation={[Math.PI / 2, 0, 0]}>
+                    <ringGeometry args={[baseRadius * 1.1, baseRadius * 1.12, 64]} />
+                    <meshBasicMaterial color="#44aaff" transparent opacity={0.8} side={THREE.DoubleSide} />
+                </mesh>
+            )}
+        </group>
+    );
+}
+
+/**
+ * Gas cloud mesh — semi-transparent glowing sphere for gas debris
+ */
+function GasCloudMesh({ object, isSelected, isHovered, onSelect, onHover }: ObjectMeshProps) {
+    const meshRef = useRef<THREE.Mesh>(null);
+    const pos = object.state.position;
+
+    const color = useMemo(() => new THREE.Color(object.visual.color || '#4488ff'), [object.visual.color]);
+
+    useFrame((state) => {
+        if (meshRef.current) {
+            meshRef.current.rotation.y = state.clock.elapsedTime * 0.05;
+        }
+    });
+
+    return (
+        <group position={[pos.x, pos.y, pos.z]}>
+            <mesh
+                ref={meshRef}
+                onClick={onSelect}
+                onPointerOver={() => onHover(true)}
+                onPointerOut={() => onHover(false)}
+            >
+                <sphereGeometry args={[0.5, 16, 16]} />
+                <meshBasicMaterial
+                    color={color}
+                    transparent
+                    opacity={0.2}
+                    depthWrite={false}
+                    toneMapped={false}
+                    blending={THREE.AdditiveBlending}
+                    side={THREE.DoubleSide}
+                />
+            </mesh>
+            {/* Outer halo */}
+            <mesh scale={1.6}>
+                <sphereGeometry args={[0.5, 12, 12]} />
+                <meshBasicMaterial
+                    color={color}
+                    transparent
+                    opacity={0.06}
+                    depthWrite={false}
+                    toneMapped={false}
+                    blending={THREE.AdditiveBlending}
+                    side={THREE.BackSide}
+                />
+            </mesh>
+        </group>
+    );
+}
+
+/**
  * Generic cosmic object renderer
  */
 function CosmicObjectRenderer({ object }: { object: CosmicObject }) {
@@ -494,6 +821,10 @@ function CosmicObjectRenderer({ object }: { object: CosmicObject }) {
             return <BlackHoleMesh {...props} />;
         case CosmicObjectType.NEUTRON_STAR:
             return <NeutronStarMesh {...props} />;
+        case CosmicObjectType.NEBULA:
+            return <NebulaMesh {...props} />;
+        case CosmicObjectType.GAS_CLOUD:
+            return <GasCloudMesh {...props} />;
         default:
             return <PlanetMesh {...props} />;
     }

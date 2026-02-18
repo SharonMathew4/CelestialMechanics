@@ -313,9 +313,9 @@ export const useSimulationStore = create<SimulationState>()((set, get) => ({
                         hasUpdates = true;
                     }
 
-                    // Clean up old collision events (> 5 seconds old)
+                    // Keep collision events indefinitely (particles persist as nebular remnant)
                     const now = Date.now();
-                    const filteredEvents = newCollisionEvents.filter(e => now - e.timestamp < 5000);
+                    const filteredEvents = newCollisionEvents.filter(e => now - e.timestamp < 600000);
 
                     if (hasUpdates) {
                         return {

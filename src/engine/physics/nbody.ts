@@ -104,6 +104,15 @@ export class NBodyEngine {
         debrisIds: string[];
     }> = [];
 
+    // Pending remnant objects: delayed black hole / neutron star spawn after collision
+    private pendingRemnants: Array<{
+        centerPos: Vector3;
+        centerVel: Vector3;
+        totalMass: number;
+        spawnTime: number;
+        nebulaId: string;
+    }> = [];
+
     // Statistics
     private stats = {
         objectCount: 0,
@@ -397,6 +406,26 @@ export class NBodyEngine {
 
                 if (this.checkCollision(obj1, obj2)) {
                     this.stats.collisions++;
+
+                    // Check if either object is a collision byproduct (debris, nebula, gas cloud)
+                    const isCollisionByproduct1 = (obj1.metadata.tags?.includes('debris') ?? false) ||
+                        obj1.type === CosmicObjectType.NEBULA ||
+                        obj1.type === CosmicObjectType.GAS_CLOUD;
+                    const isCollisionByproduct2 = (obj2.metadata.tags?.includes('debris') ?? false) ||
+                        obj2.type === CosmicObjectType.NEBULA ||
+                        obj2.type === CosmicObjectType.GAS_CLOUD;
+
+                    // Suppress ALL collisions involving any collision byproduct
+                    // This prevents cascading sub-explosions entirely
+                    if (isCollisionByproduct1 || isCollisionByproduct2) {
+                        // Silently absorb the smaller one into the larger one
+                        const m1 = obj1.properties.mass;
+                        const m2 = obj2.properties.mass;
+                        const [keeper, removed] = m1 > m2 ? [obj1, obj2] : [obj2, obj1];
+                        this.objectsToRemove.add(removed.id);
+                        keeper.properties.mass += removed.properties.mass;
+                        continue;
+                    }
 
                     // Debris limit
                     if (this.objects.size > 300) {
@@ -732,16 +761,15 @@ export class NBodyEngine {
         if ((isStar1 && isNS2) || (isStar2 && isNS1)) {
             const TOV_LIMIT = 3 * AstronomicalUnits.M_sun;
             if (totalMass > TOV_LIMIT) {
-                // Forms a black hole
-                const bh = createBlackHole({
-                    name: 'Collision Black Hole',
-                    position: centerPos,
-                    velocity: centerVel,
-                    massSolarUnits: totalMass / AstronomicalUnits.M_sun,
-                    isAccreting: true,
+                // Defer black hole creation — schedule for later
+                this.pendingRemnants.push({
+                    centerPos: centerPos.clone(),
+                    centerVel: centerVel.clone(),
+                    totalMass,
+                    spawnTime: Date.now() + 30000 + Math.random() * 30000,
+                    nebulaId: '',
                 });
-                debrisToAdd.push(bh);
-                this.recordCollisionEvent(obj1, obj2, 'stellar_collision', 'merge', centerPos, energy * 10, bh.id);
+                this.recordCollisionEvent(obj1, obj2, 'stellar_collision', 'merge', centerPos, energy * 10);
                 return;
             }
         }
@@ -753,7 +781,7 @@ export class NBodyEngine {
 
         for (let k = 0; k < debrisCount; k++) {
             const dir = this.randomSphereDir();
-            const speed = Math.random() * 12 + 5;
+            const speed = Math.random() * 3 + 1;  // Slow debris for grand explosion
             const isGas = Math.random() > 0.3;
             debrisToAdd.push({
                 id: crypto.randomUUID(),
@@ -784,7 +812,10 @@ export class NBodyEngine {
 
         // Spawn nebula at collision center
         const massSolar = totalMass / AstronomicalUnits.M_sun;
-        const nebulaExtent = Math.min(Math.max(2 + massSolar * 0.5, 2), 30);
+        const nebulaExtent = Math.min(Math.max(50 + massSolar * 2, 50), 200);
+
+        // Randomly pick a nebula visual style (0-3)
+        const nebulaStyle = Math.floor(Math.random() * 4);
 
         const nebula = createNebula({
             name: 'Collision Nebula',
@@ -794,11 +825,21 @@ export class NBodyEngine {
         });
         // Override properties for collision-spawned nebula
         nebula.properties.mass = totalMass * 0.7; // 70% of mass stays in nebula
-        nebula.isPhysicsEnabled = true;
+        nebula.isPhysicsEnabled = false;  // Don't let nebula trigger new collisions
         nebula.state.velocity = centerVel;
         (nebula as Nebula).extent = new Vector3(nebulaExtent, nebulaExtent, nebulaExtent);
         (nebula as Nebula).nebulaOriginMass = totalMass;
+        nebula.metadata.tags = [...(nebula.metadata.tags || []), `nebulaStyle_${nebulaStyle}`];
         debrisToAdd.push(nebula);
+
+        // Defer remnant creation — push to pendingRemnants for delayed spawn
+        this.pendingRemnants.push({
+            centerPos: centerPos.clone(),
+            centerVel: centerVel.clone(),
+            totalMass,
+            spawnTime: Date.now() + 30000 + Math.random() * 30000,
+            nebulaId: nebula.id,
+        });
 
         this.recordCollisionEvent(obj1, obj2, 'stellar_collision', 'merge', centerPos, energy * 5, nebula.id);
     }
@@ -819,7 +860,7 @@ export class NBodyEngine {
 
         for (let k = 0; k < debrisCount; k++) {
             const dir = this.randomSphereDir();
-            const speed = Math.random() * 20 + 8; // Very high velocity
+            const speed = Math.random() * 4 + 2; // Slower debris for grand explosion
             const debrisId = crypto.randomUUID();
             debrisIds.push(debrisId);
 
@@ -1176,7 +1217,59 @@ export class NBodyEngine {
         // STEP 7: Process kilonova collapses (delayed black hole formation)
         this.processKilonovaCollapse();
 
+        // STEP 8: Process pending remnants (delayed star/BH spawn after collision)
+        this.processPendingRemnants();
+
         this.stats.lastUpdateTime = performance.now() - startTime;
+    }
+
+    /**
+     * Process pending remnant objects: spawn black holes / neutron stars after delay
+     */
+    private processPendingRemnants(): void {
+        const now = Date.now();
+        const ready = this.pendingRemnants.filter(r => now >= r.spawnTime);
+        this.pendingRemnants = this.pendingRemnants.filter(r => now < r.spawnTime);
+
+        for (const remnant of ready) {
+            const massSolar = remnant.totalMass / AstronomicalUnits.M_sun;
+            const TOV_LIMIT = 3; // Solar masses
+
+            if (massSolar > TOV_LIMIT) {
+                // Forms a black hole
+                const bh = createBlackHole({
+                    name: 'Collision Black Hole',
+                    position: remnant.centerPos,
+                    velocity: remnant.centerVel,
+                    massSolarUnits: massSolar,
+                    isAccreting: true,
+                });
+                this.objects.set(bh.id, bh);
+
+                // Record a flash event for the remnant appearance
+                this.collisionEvents.push({
+                    timestamp: now,
+                    object1Id: remnant.nebulaId || bh.id,
+                    object2Id: bh.id,
+                    object1Name: 'Nebula',
+                    object2Name: bh.metadata.name,
+                    type: 'merge',
+                    collisionType: 'stellar_collision',
+                    resultId: bh.id,
+                    position: { x: remnant.centerPos.x, y: remnant.centerPos.y, z: remnant.centerPos.z },
+                    energy: 2.0, // Modest flash for remnant appearance
+                });
+            } else {
+                // Forms a neutron star
+                const ns = createStar({
+                    name: 'Remnant Star',
+                    position: remnant.centerPos,
+                    velocity: remnant.centerVel,
+                    massSolarUnits: massSolar,
+                });
+                this.objects.set(ns.id, ns);
+            }
+        }
     }
 
     /**
