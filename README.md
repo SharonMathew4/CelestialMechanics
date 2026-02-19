@@ -21,7 +21,6 @@
 *   **3D Engine**: [Three.js](https://threejs.org/) via [React Three Fiber](https://docs.pmnd.rs/react-three-fiber)
 *   **State Management**: [Zustand](https://github.com/pmndrs/zustand)
 *   **Build Tool**: [Vite](https://vitejs.dev/)
-*   **Desktop Wrapper**: [Electron](https://www.electronjs.org/) (Optional)
 
 ## 🚀 Getting Started
 
